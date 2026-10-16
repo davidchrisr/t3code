@@ -14,8 +14,14 @@ import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { PNG } from "pngjs";
 
 import {
+  copyDesktopBuildArtifact,
+  InvalidDesktopBuildCommitHashError,
+  resolveGitCommitHash,
+  renderMacIconPng,
+  MacIconRenderError,
   BundleNotSelfContainedError,
   BuildCommandFailedError,
   parseWslRuntimeArchiveMembers,
@@ -273,8 +279,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.1.0"), "T3 Code (Beta)");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    for (const platform of ["linux", "win"] as const) {
+      assert.equal(resolveDesktopProductName("0.1.0", platform), "T3 Code (Beta)");
+      assert.equal(
+        resolveDesktopProductName("0.0.17-nightly.20260413.42", platform),
+        "T3 Code (Nightly)",
+      );
+    }
+    assert.equal(resolveDesktopProductName("0.1.0", "mac"), "T3 Fork");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42", "mac"), "T3 Fork");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -702,7 +715,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/*.map",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Beta) 1.2.3 Installer",
+        title: "T3 Fork 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 640, height: 432 },
         contents: [
@@ -1071,9 +1084,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               readonly command: string;
               readonly args: ReadonlyArray<string>;
             };
-            const fails =
-              childProcess.command === "rustc" ||
-              (childProcess.command === "xcrun" && childProcess.args.includes("iconutil"));
+            const fails = childProcess.command === "rustc" || childProcess.command === "clang";
             return Effect.succeed(mockProcess(fails ? 1 : 0));
           }),
         );
@@ -1083,7 +1094,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
 
         assert.instanceOf(error, MacDesktopBuildPrerequisitesMissingError);
-        assert.deepStrictEqual(error.missing, ["rust", "iconutil"]);
+        assert.deepStrictEqual(error.missing, ["rust", "clang"]);
         assert.deepStrictEqual(error.rustTargets, ["aarch64-apple-darwin", "x86_64-apple-darwin"]);
         assert.include(error.message, "xcode-select --install");
         assert.include(error.message, "rustup target add aarch64-apple-darwin x86_64-apple-darwin");
@@ -1946,7 +1957,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.t3tools.t3fork",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1969,7 +1980,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3fork</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -2136,7 +2147,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.t3tools.t3fork");
+      assert.equal(config.productName, "T3 Fork");
+      assert.equal(config.artifactName, "T3-Fork-${version}-${arch}.${ext}");
+      assert.equal((config.dmg as Record<string, unknown>).title, "T3 Fork 1.2.3 Installer");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
@@ -2480,6 +2494,114 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 });
+
+it.effect("renders transparent macOS icon PNGs at the requested dimensions", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-mac-icon-" });
+    const sourcePath = path.join(root, "source.png");
+    const targetPath = path.join(root, "icon.png");
+    const source = new PNG({ width: 32, height: 32 });
+    for (let offset = 0; offset < source.data.length; offset += 4) {
+      source.data[offset] = 255;
+      source.data[offset + 1] = 255;
+      source.data[offset + 2] = 255;
+      source.data[offset + 3] = 128;
+    }
+    yield* fs.writeFile(sourcePath, PNG.sync.write(source));
+
+    yield* renderMacIconPng({ sourcePath, targetPath, size: 16 });
+    const rendered = PNG.sync.read(Buffer.from(yield* fs.readFile(targetPath)));
+    assert.equal(rendered.width, 16);
+    assert.equal(rendered.height, 16);
+    assert.equal(rendered.data[3], 128);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("surfaces invalid icon sources without creating a replacement icon", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-invalid-mac-icon-" });
+    const sourcePath = path.join(root, "source.png");
+    const targetPath = path.join(root, "icon.png");
+    yield* fs.writeFileString(sourcePath, "not an image");
+    const error = yield* Effect.flip(renderMacIconPng({ sourcePath, targetPath, size: 16 }));
+    assert.instanceOf(error, MacIconRenderError);
+    assert.equal(yield* fs.exists(targetPath), false);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("carries the source commit into builds made from a copy without Git metadata", () =>
+  Effect.gen(function* () {
+    const hash = yield* resolveGitCommitHash("/not-a-checkout");
+    assert.equal(hash, "abcdef123456");
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { T3CODE_COMMIT_HASH: " ABCDEF1234567890 " } }),
+        ),
+      ),
+    ),
+  ),
+);
+
+it.effect("rejects malformed source commit metadata", () =>
+  Effect.gen(function* () {
+    const error = yield* Effect.flip(resolveGitCommitHash("/not-a-checkout"));
+    assert.instanceOf(error, InvalidDesktopBuildCommitHashError);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { T3CODE_COMMIT_HASH: "not-a-commit" } }),
+        ),
+      ),
+    ),
+  ),
+);
+
+it.effect.skipIf(!symlinksSupported)(
+  "exports app directories with framework links and refuses stale destinations",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-directory-artifact-" });
+      const source = path.join(root, "source.app");
+      const destination = path.join(root, "exported.app");
+      const framework = path.join(source, "Contents/Frameworks/Example.framework");
+      yield* fs.makeDirectory(path.join(framework, "Versions/A"), { recursive: true });
+      yield* fs.writeFileString(path.join(framework, "Versions/A/Example"), "native payload");
+      yield* fs.symlink("A", path.join(framework, "Versions/Current"));
+      yield* fs.symlink("Versions/Current/Example", path.join(framework, "Example"));
+
+      yield* copyDesktopBuildArtifact({ source, destination, verbose: false });
+      const exportedFramework = path.join(destination, "Contents/Frameworks/Example.framework");
+      assert.equal(yield* fs.readLink(path.join(exportedFramework, "Versions/Current")), "A");
+      assert.equal(
+        yield* fs.readFileString(path.join(exportedFramework, "Example")),
+        "native payload",
+      );
+
+      yield* fs.writeFileString(path.join(framework, "Versions/A/Example"), "new payload");
+      yield* Effect.flip(copyDesktopBuildArtifact({ source, destination, verbose: false }));
+      assert.equal(
+        yield* fs.readFileString(path.join(exportedFramework, "Example")),
+        "native payload",
+      );
+
+      yield* fs.remove(source, { recursive: true });
+      assert.equal(
+        yield* fs.readFileString(path.join(exportedFramework, "Example")),
+        "native payload",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 // The self-containment check runs the packaged tree in a scratch directory. Its
 // own node_modules holds the sidecar externals and must be ignored, but any

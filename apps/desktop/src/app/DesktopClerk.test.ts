@@ -124,6 +124,12 @@ describe("DesktopClerk", () => {
 
   it.each([
     {
+      name: "packaged macOS fork",
+      isDevelopment: false,
+      platform: "darwin" as const,
+      userData: "/tmp/app-data/t3fork",
+    },
+    {
       name: "packaged Windows",
       isDevelopment: false,
       platform: "win32" as const,

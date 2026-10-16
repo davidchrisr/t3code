@@ -119,6 +119,18 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect(
+    "names the packaged macOS app independently of upstream server state and client branding",
+    () =>
+      Effect.gen(function* () {
+        const environment = yield* makeEnvironment({ isPackaged: true });
+        assert.equal(environment.displayName, "T3 Fork");
+        assert.equal(environment.branding.baseName, "T3 Code");
+        assert.equal(environment.baseDir, "/Users/alice/.t3");
+        assert.equal(environment.stateDir, "/Users/alice/.t3/userdata");
+      }),
+  );
+
   it.effect("uses the packaged Windows server sidecar as the backend root", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({

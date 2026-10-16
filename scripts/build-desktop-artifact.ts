@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 // plist is CommonJS; Node cannot load its named exports from an ES module.
 import Plist from "plist";
+import sharp from "sharp";
 
 import {
   createPackageWithOptions,
@@ -16,6 +17,7 @@ import {
 } from "@electron/asar";
 
 import { fromYaml } from "@t3tools/shared/schemaYaml";
+import { MACOS_FORK_IDENTITY } from "@t3tools/shared/desktopForkIdentity";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -380,7 +382,6 @@ const MAC_DESKTOP_BUILD_PREREQUISITES = [
   { id: "clang", description: "Xcode Command Line Tools (clang)" },
   { id: "make", description: "Xcode Command Line Tools (make)" },
   { id: "sips", description: "macOS image tool (sips)" },
-  { id: "iconutil", description: "macOS icon tool (iconutil)" },
   { id: "lipo", description: "Xcode universal-binary tool (lipo)" },
 ] as const;
 
@@ -486,6 +487,20 @@ export class DesktopIconSourceMissingError extends Schema.TaggedError<DesktopIco
 ) {
   override get message(): string {
     return `Desktop ${desktopIconPlatformNames[this.platform]} icon source is missing at ${this.sourcePath}`;
+  }
+}
+
+export class MacIconRenderError extends Schema.TaggedError<MacIconRenderError>()(
+  "MacIconRenderError",
+  {
+    sourcePath: Schema.String,
+    targetPath: Schema.String,
+    size: Schema.Number,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return `Failed to render the ${this.size}x${this.size} macOS icon at ${this.targetPath}.`;
   }
 }
 
@@ -689,6 +704,19 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<Des
   }
 }
 
+export class DesktopBuildArtifactCopyError extends Schema.TaggedError<DesktopBuildArtifactCopyError>()(
+  "DesktopBuildArtifactCopyError",
+  {
+    source: Schema.String,
+    destination: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return `Failed to copy desktop artifact from ${this.source} to ${this.destination}.`;
+  }
+}
+
 export class WslRuntimeArchiveMissingError extends Schema.TaggedError<WslRuntimeArchiveMissingError>()(
   "WslRuntimeArchiveMissingError",
   {
@@ -845,7 +873,24 @@ const spawnAndCollectOutput = Effect.fn("spawnAndCollectOutput")(function* (
   return { stdout, stderr, exitCode } as const;
 });
 
-const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRoot: string) {
+export class InvalidDesktopBuildCommitHashError extends Schema.TaggedError<InvalidDesktopBuildCommitHashError>()(
+  "InvalidDesktopBuildCommitHashError",
+  {},
+) {
+  override get message() {
+    return "T3CODE_COMMIT_HASH must contain 7 to 40 hexadecimal characters.";
+  }
+}
+
+export const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRoot: string) {
+  const configuredHash = yield* Config.String("T3CODE_COMMIT_HASH").pipe(Config.option);
+  if (Option.isSome(configuredHash)) {
+    const hash = configuredHash.value.trim();
+    if (!/^[0-9a-f]{7,40}$/i.test(hash)) {
+      return yield* new InvalidDesktopBuildCommitHashError({});
+    }
+    return hash.slice(0, 12).toLowerCase();
+  }
   const result = yield* spawnAndCollectOutput(
     ChildProcess.make("git", ["rev-parse", "--short=12", "HEAD"], {
       cwd: repoRoot,
@@ -1304,7 +1349,7 @@ export function resolveMacPasskeySigningConfiguration(
   }
 
   return {
-    appId: DESKTOP_APP_ID,
+    appId: MACOS_FORK_IDENTITY.appId,
     teamId,
     rpDomains: uniqueRpDomains,
     provisioningProfilePath,
@@ -1822,6 +1867,40 @@ const runCommand = Effect.fn("runCommand")(function* (
   }
 });
 
+/** Directory artifacts contain framework symlinks and macOS bundle metadata. */
+export const copyDesktopBuildArtifact = Effect.fn("copyDesktopBuildArtifact")(function* (input: {
+  readonly source: string;
+  readonly destination: string;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const stat = yield* fs.stat(input.source);
+  if (stat.type === "Directory") {
+    // Refuse a collision instead of merging a new app with stale bundle files.
+    yield* fs.makeDirectory(input.destination);
+    if ((yield* HostProcess.Platform) === "darwin") {
+      yield* runCommand(ChildProcess.make("ditto", [input.source, input.destination]), {
+        label: "ditto desktop directory artifact",
+        verbose: input.verbose,
+      });
+    } else {
+      // Keep relative links within the exported tree after staging is removed.
+      yield* Effect.tryPromise({
+        try: () =>
+          NodeFSP.cp(input.source, input.destination, { recursive: true, verbatimSymlinks: true }),
+        catch: (cause) =>
+          new DesktopBuildArtifactCopyError({
+            source: input.source,
+            destination: input.destination,
+            cause,
+          }),
+      });
+    }
+  } else {
+    yield* fs.copyFile(input.source, input.destination);
+  }
+});
+
 const desktopBuildProbeSucceeds = Effect.fn("desktopBuildProbeSucceeds")(function* (
   command: ChildProcess.Command,
   label: string,
@@ -1906,10 +1985,6 @@ export const preflightMacDesktopBuild = Effect.fn("preflightMacDesktopBuild")(fu
       clang: desktopBuildProbeSucceeds(ChildProcess.make("clang", ["--version"]), "clang"),
       make: desktopBuildProbeSucceeds(ChildProcess.make("make", ["--version"]), "make"),
       sips: desktopBuildProbeSucceeds(ChildProcess.make("sips", ["--help"]), "sips"),
-      iconutil: desktopBuildProbeSucceeds(
-        ChildProcess.make("xcrun", ["--find", "iconutil"]),
-        "iconutil",
-      ),
       lipo:
         arch === "universal"
           ? desktopBuildProbeSucceeds(ChildProcess.make("lipo", ["-version"]), "lipo")
@@ -2435,44 +2510,19 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
   );
 });
 
-function generateMacIconSet(
-  sourcePng: string,
-  targetIcns: string,
-  tmpRoot: string,
-  path: Path.Path,
-  verbose: boolean,
-) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const iconsetDir = path.join(tmpRoot, "icon.iconset");
-    yield* fs.makeDirectory(iconsetDir, { recursive: true });
-
-    const iconSizes = [16, 32, 128, 256, 512] as const;
-    for (const size of iconSizes) {
-      yield* runCommand(
-        ChildProcess.make(
-          {},
-        )`sips -z ${size} ${size} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}.png`)}`,
-        { label: `sips icon ${size}x${size}`, verbose },
-      );
-
-      const retinaSize = size * 2;
-      yield* runCommand(
-        ChildProcess.make(
-          {},
-        )`sips -z ${retinaSize} ${retinaSize} ${sourcePng} --out ${path.join(iconsetDir, `icon_${size}x${size}@2x.png`)}`,
-        { label: `sips icon ${size}x${size}@2x`, verbose },
-      );
-    }
-
-    yield* runCommand(ChildProcess.make({})`iconutil -c icns ${iconsetDir} -o ${targetIcns}`, {
-      label: "iconutil icns",
-      verbose,
-    });
+/** Sharp keeps image-processing temporaries in TMPDIR; sips uses the shared OS temp directory. */
+export const renderMacIconPng = (input: {
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly size: number;
+}) =>
+  Effect.tryPromise({
+    try: () =>
+      sharp(input.sourcePath).resize(input.size, input.size).png().toFile(input.targetPath),
+    catch: (cause) => new MacIconRenderError({ ...input, cause }),
   });
-}
 
-function stageMacIcons(stageResourcesDir: string, sourcePng: string, verbose: boolean) {
+function stageMacIcons(stageResourcesDir: string, sourcePng: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -2483,19 +2533,12 @@ function stageMacIcons(stageResourcesDir: string, sourcePng: string, verbose: bo
       });
     }
 
-    const tmpRoot = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3code-icon-build-",
-    });
-
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
-    const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
+    const iconSourcePath = path.join(stageResourcesDir, "icon-source.png");
 
-    yield* runCommand(ChildProcess.make({})`sips -z 512 512 ${sourcePng} --out ${iconPngPath}`, {
-      label: "sips mac icon",
-      verbose,
-    });
-
-    yield* generateMacIconSet(sourcePng, iconIcnsPath, tmpRoot, path, verbose);
+    yield* renderMacIconPng({ sourcePath: sourcePng, targetPath: iconPngPath, size: 512 });
+    // electron-builder converts this full-resolution PNG to ICNS inside its own toolset.
+    yield* renderMacIconPng({ sourcePath: sourcePng, targetPath: iconSourcePath, size: 1024 });
   });
 }
 
@@ -2743,7 +2786,11 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(version: string): string {
+export function resolveDesktopProductName(
+  version: string,
+  platform: typeof BuildPlatform.Type,
+): string {
+  if (platform === "mac") return MACOS_FORK_IDENTITY.name;
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
@@ -2769,9 +2816,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    appId: platform === "mac" ? MACOS_FORK_IDENTITY.appId : DESKTOP_APP_ID,
+    productName: resolveDesktopProductName(version, platform),
+    artifactName:
+      platform === "mac"
+        ? `${MACOS_FORK_IDENTITY.name.replaceAll(" ", "-")}-\${version}-\${arch}.\${ext}`
+        : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2798,6 +2848,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
   };
+  const electronCache = yield* Config.String("ELECTRON_CACHE").pipe(Config.option);
+  if (Option.isSome(electronCache) && electronCache.value !== "") {
+    buildConfig.electronDownload = { cache: electronCache.value };
+  }
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
@@ -2818,7 +2872,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
       target: target === "dmg" ? [target, "zip"] : [target],
-      icon: "icon.icns",
+      icon: "icon-source.png",
       category: "public.app-category.developer-tools",
       extendInfo: {
         // macOS 26 offers Messages/Mail codes in every text field unless opted out.
@@ -2866,7 +2920,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // Give the themed installer its own Finder volume name. Finder caches
       // DMG window backgrounds by volume name, so reusing a generic name can
       // make a newly built background look unchanged during testing.
-      title: `${resolveDesktopProductName(version)} ${version} Installer`,
+      title: `${resolveDesktopProductName(version, platform)} ${version} Installer`,
       background: `dmg/dmg-background-${updateChannel}.png`,
       window: {
         width: 640,
@@ -2976,7 +3030,7 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   verbose: boolean,
 ) {
   if (platform === "mac") {
-    yield* stageMacIcons(stageResourcesDir, iconAssets.macIconPng, verbose);
+    yield* stageMacIcons(stageResourcesDir, iconAssets.macIconPng);
     return;
   }
 
@@ -3860,7 +3914,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: options.platform === "mac" ? MACOS_FORK_IDENTITY.slug : "t3code",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
@@ -4061,7 +4115,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      appExecutableName: `${resolveDesktopProductName(appVersion, options.platform)}.exe`,
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({
@@ -4079,10 +4133,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
+    if (!stat || (stat.type !== "File" && !(options.target === "dir" && stat.type === "Directory")))
+      continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
+    yield* copyDesktopBuildArtifact({ source: from, destination: to, verbose: options.verbose });
     copiedArtifacts.push(to);
   }
 

@@ -185,6 +185,54 @@ For a cross-architecture or universal build, add the requested Rust targets:
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
 
+### Isolated local macOS app builds
+
+Use the sandbox wrapper to build a local `.app` with host Node, `vp`, Rust, and
+Xcode tools while keeping dependency installation and compilation in a source
+copy. Put compatible tools on `PATH`, then run from the checkout:
+
+```sh
+scripts/sandboxed-desktop-build.sh --check
+scripts/sandboxed-desktop-build.sh --arch arm64
+```
+
+`--check` tests allowed writes and denied access from subprocesses before any
+dependency install. It also works before Node, `vp`, and Rust are installed.
+The build repeats these checks, installs desktop, server, and build-tool workspace
+dependencies with the frozen lockfile, and writes the app under
+`release/sandboxed-macos/<run>/`. Existing output
+directories are rejected rather than merged with stale bundle files.
+
+The copy includes tracked files and unignored local source edits, and excludes
+Git metadata, `.env` files, user state, existing dependencies, and build output. The wrapper passes the
+original commit as build metadata and starts children with an explicit
+environment. Custom root `.env` configuration is not included.
+
+Children can write their own run directory, the shared cache, and the current
+output directory. Shared bootstrap files and run parents stay read-only, and
+bootstrap rejects symlinked parent directories. Log files are opened inside the
+sandbox so child-created links cannot redirect host writes outside it.
+
+Build copies, private homes, temporary files, package caches, and logs stay under
+`.local/scratch/macos-build/`. Outside-access probe fixtures stay under
+`.local/scratch/macos-build-probes/`. These are retained for inspection; remove
+them when the related build work is complete. Packaging uses a private OS-temp
+alias pointing to the local temporary directory because ASAR globs skip hidden
+path components. Each run's `temp-alias` file records the alias directory to
+remove with that run. Installed tools and Rust toolchains
+are readable but not writable. Network access is enabled for package downloads.
+
+To run a focused check in the same environment after dependency installation:
+
+```sh
+scripts/sandboxed-desktop-build.sh -- vp test run scripts/build-desktop-artifact.test.ts
+```
+
+This workflow uses macOS's deprecated `sandbox-exec` facility. The wrapper fails
+if its isolation checks fail. It builds an app without launching it or accessing
+the live T3 home. Signed distribution and DMG packaging use the normal release
+workflow.
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.
