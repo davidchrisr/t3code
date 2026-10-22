@@ -265,8 +265,11 @@ main() {
   cd "$run_dir/source"
   local node_version
   node_version=$(run_sandbox "$node_path" -e '
-    if (Number(process.versions.node.split(".")[0]) !== 24) {
-      console.error("This checkout requires Node 24. Put a compatible Node on PATH before building.");
+    const { readFileSync } = require("node:fs");
+    const requiredVersion = JSON.parse(readFileSync("package.json", "utf8")).engines.node;
+    const requiredMajor = Number(requiredVersion.split(".")[0]);
+    if (Number(process.versions.node.split(".")[0]) !== requiredMajor) {
+      console.error("This checkout requires Node " + requiredVersion + ". Put a compatible Node on PATH before building.");
       process.exit(1);
     }
     process.stdout.write(process.versions.node);

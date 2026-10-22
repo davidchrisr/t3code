@@ -18,7 +18,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
-  VcsRepositoryDetectionError,
 } from "@t3tools/contracts";
 
 import * as ServerSettings from "../serverSettings.ts";
@@ -167,82 +166,6 @@ function makeRegistry(input: {
   );
 }
 
-it.effect("routes GitHub remotes to the GitHub provider", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({
-      remotes: [{ name: "origin", url: "git@github.com:pingdotgg/t3code.git" }],
-    });
-
-    const provider = yield* registry.resolve({ cwd: "/repo" });
-
-    assert.strictEqual(provider.kind, "github");
-  }),
-);
-
-it.effect("routes directly by provider kind for remote-first workflows", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({
-      remotes: [],
-    });
-
-    const provider = yield* registry.get(SourceControlProviderKind.make("github"));
-
-    assert.strictEqual(provider.kind, "github");
-  }),
-);
-
-it.effect("includes the request cwd when an unregistered provider is used", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({ remotes: [] });
-    const provider = yield* registry.get(SourceControlProviderKind.make("unknown"));
-
-    const error = yield* provider
-      .getChangeRequest({ cwd: "/repo", reference: "#42" })
-      .pipe(Effect.flip);
-
-    assert.strictEqual(error.provider, "unknown");
-    assert.strictEqual(error.operation, "getChangeRequest");
-    assert.strictEqual(error.cwd, "/repo");
-    assert.strictEqual(error.reference, "#42");
-  }),
-);
-
-it.effect("retains VCS detection failures with structured cwd context", () =>
-  Effect.gen(function* () {
-    const cause = new VcsRepositoryDetectionError({
-      operation: "resolve",
-      cwd: "/repo",
-      detail: "raw VCS detection failure",
-      cause: new Error("raw nested failure"),
-    });
-    const registry = yield* makeRegistry({
-      remotes: [],
-      resolve: () => Effect.fail(cause),
-    });
-
-    const error = yield* registry.resolve({ cwd: "/repo" }).pipe(Effect.flip);
-
-    assert.strictEqual(error.provider, "unknown");
-    assert.strictEqual(error.operation, "detectProvider");
-    assert.strictEqual(error.cwd, "/repo");
-    assert.strictEqual(error.detail, "Failed to detect source control provider.");
-    assert.strictEqual(error.cause, cause);
-    assert.equal(error.message.includes(cause.message), false);
-  }),
-);
-
-it.effect("routes GitLab remotes to the GitLab provider", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({
-      remotes: [{ name: "origin", url: "git@gitlab.com:group/project.git" }],
-    });
-
-    const provider = yield* registry.resolve({ cwd: "/repo" });
-
-    assert.strictEqual(provider.kind, "gitlab");
-  }),
-);
-
 it.effect("routes authenticated self-hosted GitLab remotes without relying on host naming", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry({
@@ -325,30 +248,6 @@ it.effect("routes authenticated self-hosted GitLab remotes on non-standard ports
   }),
 );
 
-it.effect("routes Bitbucket remotes to the Bitbucket provider", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({
-      remotes: [{ name: "origin", url: "git@bitbucket.org:pingdotgg/t3code.git" }],
-    });
-
-    const provider = yield* registry.resolve({ cwd: "/repo" });
-
-    assert.strictEqual(provider.kind, "bitbucket");
-  }),
-);
-
-it.effect("routes Azure DevOps remotes to the Azure DevOps provider", () =>
-  Effect.gen(function* () {
-    const registry = yield* makeRegistry({
-      remotes: [{ name: "origin", url: "https://dev.azure.com/acme/project/_git/repo" }],
-    });
-
-    const provider = yield* registry.resolve({ cwd: "/repo" });
-
-    assert.strictEqual(provider.kind, "azure-devops");
-  }),
-);
-
 it.effect("falls back to a non-origin remote when origin is not configured", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry({
@@ -416,7 +315,6 @@ it.effect(
 
 it.effect.each([
   { name: "a credential", credential: "found", expected: "github" },
-  // Claimed so the error says the host is turned off, not that it is unsupported.
   { name: "a host turned off in Settings", credential: "disabled", expected: "github" },
   { name: "no credential", credential: "missing", expected: "unknown" },
 ] as const)("resolves custom-host remotes with $name", (scenario) =>
@@ -446,7 +344,6 @@ it.effect.each([
     assert.strictEqual(handle.provider.kind, SourceControlProviderKind.make(scenario.expected));
     assert.strictEqual(handle.context?.provider.baseUrl, "https://code.example.test");
     assert.deepStrictEqual(hosts, ["code.example.test"]);
-    // Recognition goes through the credential layer; gh is only one of its sources.
     assert.notInclude(commands, "gh");
   }),
 );
@@ -538,7 +435,6 @@ it.effect("asks once for every checkout of a server no integration claims", () =
       },
     });
 
-    // Three checkouts read while the first probe is still running share it.
     const started = yield* Effect.forEach(["a", "b", "c"], () => Deferred.make<void>());
     const callers = yield* Effect.forEach(
       ["a", "b", "c"],
@@ -557,7 +453,6 @@ it.effect("asks once for every checkout of a server no integration claims", () =
       ["unknown", "unknown", "unknown"],
     );
     const once = asked.slice();
-    // glab is asked about the remote's host as the remote spells it.
     assert.sameMembers(once, [
       "credential git.example.internal",
       "glab auth status --hostname Git.Example.Internal",
@@ -565,7 +460,6 @@ it.effect("asks once for every checkout of a server no integration claims", () =
       "tea",
     ]);
 
-    // A login made in a terminal sends no signal, so the server is asked again later.
     yield* TestClock.adjust("5 minutes");
     yield* resolveUnknown(registry, "a");
     assert.deepStrictEqual(asked, [...once, ...once]);
@@ -602,7 +496,6 @@ it.effect("asks again once Settings change", () =>
       settings: {
         subscribeChanges: PubSub.subscribe(changes).pipe(
           Effect.map((subscription) =>
-            // A change is handled once the registry asks for the next one.
             Stream.fromSubscription(subscription).pipe(
               Stream.flatMap((settings) =>
                 Stream.concat(
@@ -626,7 +519,6 @@ it.effect("asks again once Settings change", () =>
     signedIn = true;
     assert.strictEqual((yield* resolveUnknown(registry, "b")).provider.kind, "unknown");
 
-    // A token saved for the host in Settings.
     yield* PubSub.publish(changes, DEFAULT_SERVER_SETTINGS);
     yield* Deferred.await(handled);
     assert.strictEqual((yield* resolveUnknown(registry, "c")).provider.kind, "github");

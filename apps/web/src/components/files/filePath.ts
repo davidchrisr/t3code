@@ -1,5 +1,5 @@
 import type { ProjectEntry } from "@t3tools/contracts";
-import { isWindowsAbsolutePath, isAbsolutePath } from "@t3tools/shared/path";
+import { isWindowsAbsolutePath, isHostPath } from "@t3tools/shared/path";
 
 export interface FileBreadcrumb {
   label: string;
@@ -11,15 +11,11 @@ export interface FileBreadcrumbChild extends ProjectEntry {
   label: string;
 }
 
-/**
- * Crumbs for a workspace-relative path start at the project. An absolute host
- * path is outside the workspace, so its crumbs start at the filesystem root.
- */
 export function fileBreadcrumbs(projectName: string, relativePath: string): FileBreadcrumb[] {
-  const hostPath = isAbsolutePath(relativePath);
+  const hostPath = isHostPath(relativePath);
   const separator = isWindowsAbsolutePath(relativePath) ? "\\" : "/";
   const parts = relativePath.split(/[\\/]/).filter(Boolean);
-  const root = relativePath.startsWith("\\\\") ? "\\\\" : hostPath && separator === "/" ? "/" : "";
+  const root = relativePath.startsWith("\\\\") ? "\\\\" : relativePath.startsWith("/") ? "/" : "";
   return [
     ...(hostPath ? [] : [{ label: projectName, path: "", kind: "project" as const }]),
     ...parts.map((part, index) => {
@@ -47,7 +43,7 @@ export function breadcrumbPathOf(relativePath: string): string {
  * server (`\\server`) is not one; its shares (`\\server\share`) are.
  */
 export function isListableHostFolder(path: string): boolean {
-  return isAbsolutePath(path) && !/^\\\\[^\\/]+$/.test(path);
+  return isHostPath(path) && !/^\\\\[^\\/]+$/.test(path);
 }
 
 /** Index of `path`'s crumb among `trail`'s crumbs; -1 when the trail does not pass through it. */
