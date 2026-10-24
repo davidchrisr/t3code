@@ -1345,7 +1345,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3fork</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -1692,6 +1692,10 @@ it.effect("keeps macOS fork packaging separate while preserving other platform n
     );
     assert.equal(config.appId, "com.t3tools.t3fork");
     assert.equal(config.productName, "T3 Fork");
+    const mac = config.mac as Record<string, unknown>;
+    assert.equal(mac.identity, "-");
+    assert.equal(mac.notarize, false);
+    assert.match(mac.sign as string, /scripts[\\/]sign-macos\.ts$/);
     assert.equal(config.artifactName, "T3-Fork-${version}-${arch}.${ext}");
     assert.equal((config.dmg as Record<string, unknown>).title, "T3 Fork 1.2.3 Installer");
     assert.equal(resolveDesktopProductName("1.2.3-nightly.20261022.1", "mac"), "T3 Fork");
@@ -1702,6 +1706,30 @@ it.effect("keeps macOS fork packaging separate while preserving other platform n
         "T3 Code (Nightly)",
       );
     }
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(NodeServices.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+    ),
+  ),
+);
+
+it.effect("preserves certificate signing and notarization discovery for signed macOS builds", () =>
+  Effect.gen(function* () {
+    const config = yield* createBuildConfig(
+      "mac",
+      "dmg",
+      "1.2.3",
+      true,
+      false,
+      undefined,
+      undefined,
+    );
+    const mac = config.mac as Record<string, unknown>;
+    assert.notProperty(mac, "identity");
+    assert.notProperty(mac, "notarize");
+    assert.notProperty(mac, "hardenedRuntime");
+    assert.notProperty(mac, "timestamp");
+    assert.match(mac.sign as string, /scripts[\\/]sign-macos\.ts$/);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(NodeServices.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),

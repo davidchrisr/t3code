@@ -162,7 +162,8 @@ Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](
 
 ## Desktop artifacts
 
-Local artifact builds are unsigned by default and write to `release/`:
+Local artifact builds write to `release/`. macOS builds are ad-hoc signed by
+default; Linux and Windows builds are unsigned:
 
 ```sh
 vp run dist:desktop:dmg
@@ -173,6 +174,10 @@ vp run dist:desktop:win
 DMGs default to the host architecture. Use `--arch` to choose another target and `--keep-stage`
 to retain packaging files for inspection. Run `vp run dist:desktop:artifact --help` for other
 options.
+
+For reliable Local Network permission tracking across macOS rebuilds, use an
+Apple-issued signing identity with `--signed`. Ad-hoc signatures do not provide a
+stable identity across builds. See [Apple's local network privacy guidance](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy#Build-time-considerations).
 
 ### Linux AppImage prerequisites
 

@@ -2968,7 +2968,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      sign: path.join(repoRoot, "scripts/sign-macos.ts"),
+      ...(!signed
+        ? { identity: "-", hardenedRuntime: false, timestamp: "none", notarize: false }
+        : {}),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -4170,6 +4173,15 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
 
     const to = path.join(options.outputDir, entry);
     yield* copyDesktopBuildArtifact({ source: from, destination: to, verbose: options.verbose });
+    if (options.platform === "mac" && stat.type === "Directory") {
+      for (const name of yield* fs.readDirectory(to)) {
+        if (!name.endsWith(".app")) continue;
+        yield* runCommand(
+          ChildProcess.make("codesign", ["--verify", "--deep", "--strict", path.join(to, name)]),
+          { label: "verify exported macOS app", verbose: options.verbose },
+        );
+      }
+    }
     copiedArtifacts.push(to);
   }
 
