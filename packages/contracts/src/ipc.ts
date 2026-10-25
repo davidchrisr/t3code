@@ -944,6 +944,20 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
   webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
+export const DesktopPreviewPresentationInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  visible: Schema.Boolean,
+  captureIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type DesktopPreviewPresentationInput = typeof DesktopPreviewPresentationInputSchema.Type;
+
+export const DesktopPreviewCaptureActivity = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  captureId: TrimmedNonEmptyString,
+  active: Schema.Boolean,
+});
+export type DesktopPreviewCaptureActivity = typeof DesktopPreviewCaptureActivity.Type;
+
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1129,6 +1143,8 @@ export interface DesktopPreviewBridge {
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
   registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  updatePresentation?: (input: DesktopPreviewPresentationInput) => Promise<void>;
+  onCaptureActivity?: (listener: (event: DesktopPreviewCaptureActivity) => void) => () => void;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;

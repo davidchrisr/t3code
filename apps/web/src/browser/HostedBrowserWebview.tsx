@@ -5,13 +5,18 @@ import type {
 } from "@t3tools/contracts";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
 
-import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
+import {
+  acquireBrowserSurfaceActivity,
+  resolveBrowserSurfacePanelRect,
+  useBrowserSurfaceStore,
+} from "./browserSurfaceStore";
 import { useActiveBrowserRecordingTabIds } from "./browserRecording";
 import {
   browserViewportSettingKey,
@@ -100,6 +105,39 @@ export function HostedBrowserWebview(props: {
     (state) => (state.activityByTabId[runtimeTabId] ?? 0) > 0,
   );
   const recordingActive = useActiveBrowserRecordingTabIds().has(runtimeTabId);
+  const reportPresentation = useEffectEvent((captureIds: ReadonlyArray<string> = []) =>
+    previewBridge?.updatePresentation?.({
+      tabId: runtimeTabId,
+      visible:
+        pictureInPicture ||
+        (presentation.visible && presentation.rect !== null && !document.hidden),
+      captureIds,
+    }),
+  );
+  useEffect(() => {
+    const bridge = previewBridge;
+    if (!bridge?.onCaptureActivity || !bridge.updatePresentation) return;
+    const captures = new Map<string, () => void>();
+    const unsubscribe = bridge.onCaptureActivity((event) => {
+      if (event.tabId !== runtimeTabId) return;
+      if (!event.active) {
+        captures.get(event.captureId)?.();
+        captures.delete(event.captureId);
+        return;
+      }
+      if (!captures.has(event.captureId)) {
+        // Acknowledge only after React commits the guest's capture position.
+        flushSync(() => {
+          captures.set(event.captureId, acquireBrowserSurfaceActivity(runtimeTabId));
+        });
+      }
+      void reportPresentation([event.captureId]);
+    });
+    return () => {
+      unsubscribe();
+      for (const release of captures.values()) release();
+    };
+  }, [runtimeTabId]);
   usePreviewBridge({ threadRef, tabId, runtimeTabId, serverDriven });
 
   const serverColorScheme = serverRendering?.colorScheme;
@@ -158,6 +196,7 @@ export function HostedBrowserWebview(props: {
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
+            if (!disposed) await reportPresentation();
           }
         } catch {}
       })();
@@ -200,6 +239,23 @@ export function HostedBrowserWebview(props: {
   ]);
 
   const active = presentation.visible && presentation.rect !== null;
+  useEffect(() => {
+    const updatePresentation = previewBridge?.updatePresentation;
+    if (!updatePresentation || !serverDriven) return;
+    const report = () => {
+      void updatePresentation({
+        tabId: runtimeTabId,
+        visible: pictureInPicture || (active && !document.hidden),
+        captureIds: [],
+      });
+    };
+    report();
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      document.removeEventListener("visibilitychange", report);
+      void updatePresentation({ tabId: runtimeTabId, visible: false, captureIds: [] });
+    };
+  }, [active, pictureInPicture, runtimeTabId, serverDriven]);
   const lastRect = presentation.rect;
   const layoutZoomFactor = useBrowserLayoutZoomFactor(zoomFactor);
   const viewportWidth = viewport._tag === "fill" ? null : viewport.width;

@@ -4,6 +4,8 @@ import {
   DesktopBrowserCommand,
   DesktopBrowserEvent,
   type DesktopBrowserEvent as DesktopBrowserEventType,
+  type DesktopPreviewCaptureActivity,
+  type DesktopPreviewPresentationInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as NodePath from "node:path";
@@ -30,6 +32,7 @@ export interface DesktopBrowserTabKey {
 }
 
 export interface DesktopBrowserTabDebugger {
+  readonly runtimeTabId: string;
   readonly webContents: Electron.WebContents;
   readonly debugger: Electron.Debugger;
 }
@@ -42,6 +45,8 @@ interface AttachedTab {
   relay: CdpRelayConnection | null;
   screenshotTurn: object | null;
   readonly waitingScreenshots: Array<() => void>;
+  readonly captures: Map<string, { readonly start: () => void; readonly cancel: () => void }>;
+  readonly presentation: { visible: boolean };
   downloadDirectory: string | null;
   pendingDownloadGuid: string | null;
   agentInputAt: number;
@@ -59,6 +64,11 @@ export class DesktopBrowserHost extends Context.Service<
   {
     readonly events: Stream.Stream<Uint8Array>;
     readonly handleCommandLine: (line: string) => Effect.Effect<void>;
+    readonly captureActivity: Stream.Stream<DesktopPreviewCaptureActivity>;
+    readonly updatePresentation: (
+      input: DesktopPreviewPresentationInput,
+      rendererId: number | undefined,
+    ) => void;
     readonly attach: (key: DesktopBrowserTabKey, debuggee: DesktopBrowserTabDebugger) => void;
     readonly detach: (key: DesktopBrowserTabKey) => void;
     readonly humanStartedDownload: (source: Electron.WebContents) => boolean;
@@ -74,6 +84,8 @@ export class DesktopBrowserHost extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const outbox = yield* PubSub.unbounded<DesktopBrowserEventType>();
+  const captureActivity = yield* PubSub.unbounded<DesktopPreviewCaptureActivity>();
+  let captureSequence = 0;
   const pointers = yield* PubSub.sliding<{
     readonly key: DesktopBrowserTabKey;
     readonly phase: "move" | "click";
@@ -82,6 +94,10 @@ export const make = Effect.gen(function* () {
   }>(16);
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const tabs = new Map<string, AttachedTab>();
+  const presentations = new WeakMap<
+    Electron.WebContents,
+    { readonly tabKey: string; readonly runtimeTabId: string; visible: boolean }
+  >();
   const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
 
   const nextScreenshot = (tab: AttachedTab) => {
@@ -109,11 +125,28 @@ export const make = Effect.gen(function* () {
         }
         const turn = {};
         tab.screenshotTurn = turn;
-        capture()
-          .finally(() => {
-            if (tab.screenshotTurn === turn) nextScreenshot(tab);
-          })
-          .then(resolve, reject);
+        const captureId = String(++captureSequence);
+        const activity = { tabId: tab.debuggee.runtimeTabId, captureId };
+        let started = false;
+        const finish = () => {
+          if (!tab.captures.delete(captureId)) return;
+          runFork(PubSub.publish(captureActivity, { ...activity, active: false }));
+          if (tab.screenshotTurn === turn) nextScreenshot(tab);
+        };
+        tab.captures.set(captureId, {
+          start: () => {
+            if (started) return;
+            started = true;
+            Promise.resolve().then(capture).finally(finish).then(resolve, reject);
+          },
+          cancel: () => {
+            // Keep in-flight copies paintable until Chromium actually completes them.
+            if (started) return;
+            finish();
+            reject(new Error("The preview connection that asked for this screenshot closed."));
+          },
+        });
+        runFork(PubSub.publish(captureActivity, { ...activity, active: true }));
       };
       if (tab.screenshotTurn === null) start();
       else tab.waitingScreenshots.push(start);
@@ -170,6 +203,7 @@ export const make = Effect.gen(function* () {
     if (!tab) return;
     tabs.delete(id);
     tab.relay = null;
+    for (const capture of tab.captures.values()) capture.cancel();
     tab.debuggee.debugger.off("message", tab.onMessage);
     tab.debuggee.webContents.off("did-navigate", tab.onNewDocument);
     emit({ type: "detached", ...key });
@@ -179,12 +213,22 @@ export const make = Effect.gen(function* () {
     const id = keyOf(key);
     if (tabs.get(id)?.debuggee.webContents === debuggee.webContents) return;
     detach(key);
+    const previousPresentation = presentations.get(debuggee.webContents);
+    const presentation =
+      !debuggee.webContents.isDestroyed() &&
+      previousPresentation?.tabKey === id &&
+      previousPresentation.runtimeTabId === debuggee.runtimeTabId
+        ? previousPresentation
+        : { tabKey: id, runtimeTabId: debuggee.runtimeTabId, visible: false };
+    presentations.set(debuggee.webContents, presentation);
     const tab: AttachedTab = {
       key,
       debuggee,
       relay: null,
       screenshotTurn: null,
       waitingScreenshots: [],
+      captures: new Map(),
+      presentation,
       downloadDirectory: null,
       pendingDownloadGuid: null,
       agentInputAt: Number.NEGATIVE_INFINITY,
@@ -198,13 +242,17 @@ export const make = Effect.gen(function* () {
       // A screenshot pending when the page loads a new document, a reload included, can
       // stay unanswered. A crashed page lands here once it reloads, well after its renderer died.
       onNewDocument: () => {
-        if (tab.screenshotTurn !== null) nextScreenshot(tab);
+        const turn = tab.screenshotTurn;
+        const previousCaptures = [...tab.captures.values()];
+        for (const capture of previousCaptures) capture.cancel();
+        if (turn !== null && tab.screenshotTurn === turn) nextScreenshot(tab);
       },
     };
     tabs.set(id, tab);
     debuggee.debugger.on("message", tab.onMessage);
     debuggee.webContents.on("did-navigate", tab.onNewDocument);
     emit({ type: "attached", ...key });
+    if (presentation.visible) emit({ type: "visibility", ...key, visible: true });
   };
 
   const handleCommandLine = (line: string) =>
@@ -220,6 +268,7 @@ export const make = Effect.gen(function* () {
       }
       if (command.value.type === "release") {
         tab.relay = null;
+        for (const capture of tab.captures.values()) capture.cancel();
         return;
       }
       if (AGENT_INPUT_COMMAND.test(command.value.message)) tab.agentInputAt = performance.now();
@@ -231,18 +280,46 @@ export const make = Effect.gen(function* () {
     return tab !== undefined && performance.now() - tab.agentInputAt > AGENT_DOWNLOAD_WINDOW_MS;
   };
 
+  const updatePresentation = (
+    { tabId, visible, captureIds }: DesktopPreviewPresentationInput,
+    rendererId: number | undefined,
+  ) => {
+    if (rendererId === undefined) return;
+    const tab = [...tabs.values()].find(
+      (tab) =>
+        tab.debuggee.runtimeTabId === tabId &&
+        !tab.debuggee.webContents.isDestroyed() &&
+        tab.debuggee.webContents.hostWebContents?.id === rendererId,
+    );
+    if (!tab) return;
+    if (tab.presentation.visible !== visible) {
+      tab.presentation.visible = visible;
+      emit({ type: "visibility", ...tab.key, visible });
+    }
+    for (const captureId of captureIds) tab.captures.get(captureId)?.start();
+  };
+
   const announceAll = Effect.suspend(() =>
     Effect.forEach(
       [...tabs.values()],
       (tab) => {
         tab.relay = null;
-        return PubSub.publish(outbox, { type: "attached", ...tab.key });
+        for (const capture of tab.captures.values()) capture.cancel();
+        return PubSub.publish(outbox, { type: "attached", ...tab.key }).pipe(
+          Effect.andThen(
+            tab.presentation.visible
+              ? PubSub.publish(outbox, { type: "visibility", ...tab.key, visible: true })
+              : Effect.void,
+          ),
+        );
       },
       { discard: true },
     ),
   );
 
   return DesktopBrowserHost.of({
+    captureActivity: Stream.fromPubSub(captureActivity),
+    updatePresentation,
     pointers: Stream.fromPubSub(pointers),
     // Subscribes before announcing, so no attach falls between the two.
     events: Stream.unwrap(

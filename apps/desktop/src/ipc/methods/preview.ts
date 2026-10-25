@@ -7,6 +7,7 @@ import {
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
+  DesktopPreviewPresentationInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
@@ -28,11 +29,13 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
+import * as DesktopBrowserHost from "../../preview/DesktopBrowserHost.ts";
 import { normalizeCaptureFailure } from "../../preview/captureErrors.ts";
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import { PREVIEW_WEBVIEW_PREFERENCES } from "../../preview/WebviewPreferences.ts";
@@ -44,6 +47,13 @@ export const installPreviewEventForwarding = Effect.fn(
 )(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const manager = yield* PreviewManager.PreviewManager;
+  const browserHost = yield* DesktopBrowserHost.DesktopBrowserHost;
+  yield* browserHost.captureActivity.pipe(
+    Stream.runForEach((event) =>
+      electronWindow.sendAll(IpcChannels.PREVIEW_CAPTURE_ACTIVITY_CHANNEL, event),
+    ),
+    Effect.forkScoped,
+  );
   yield* manager.subscribeStateChanges((tabId, state) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, tabId, state),
   );
@@ -103,6 +113,16 @@ const registerWebview = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.registerWebview(tabId, webContentsId);
+  }),
+});
+
+const updatePresentation = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_PRESENTATION_CHANNEL,
+  payload: DesktopPreviewPresentationInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.updatePresentation")(function* (input, event) {
+    const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+    host.updatePresentation(input, event?.sender.id);
   }),
 });
 
@@ -424,6 +444,7 @@ export const methods = [
   createTab,
   closeTab,
   registerWebview,
+  updatePresentation,
   navigate,
   goBack,
   goForward,

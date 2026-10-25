@@ -580,7 +580,8 @@ const make = Effect.gen(function* () {
             liveTabs: [...tabs.values()].map((tab) => ({
               threadId: tab.threadId,
               tabId: tab.tabId,
-              visible: tab.viewers.size > 0,
+              visible:
+                tab.viewers.size > 0 || (tab.desktop !== null && desktopChannel.isVisible(tab)),
             })),
           }),
         ),
@@ -1361,7 +1362,7 @@ const make = Effect.gen(function* () {
     const viewport = tab.page.viewportSize();
     const status = {
       available: true,
-      visible: tab.viewers.size > 0,
+      visible: tab.viewers.size > 0 || (tab.desktop !== null && desktopChannel.isVisible(tab)),
       tabId: tab.tabId,
       url: url === "about:blank" ? null : url,
       title: null,
@@ -1385,7 +1386,9 @@ const make = Effect.gen(function* () {
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
-          visible: candidate.viewers.size > 0,
+          visible:
+            candidate.viewers.size > 0 ||
+            (candidate.desktop !== null && desktopChannel.isVisible(candidate)),
           ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
         })),
       ...profileStatus(),
@@ -2456,6 +2459,10 @@ const make = Effect.gen(function* () {
         if (tab?.desktop) dropTab(tab, false);
       }),
     ),
+    Effect.forkScoped,
+  );
+  yield* desktopChannel.visibilityChanged.pipe(
+    Stream.runForEach(() => Effect.sync(reportLiveTabs)),
     Effect.forkScoped,
   );
   // Reconnect returned pages immediately so all clients keep receiving URL and title changes.

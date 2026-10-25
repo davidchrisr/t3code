@@ -1,6 +1,7 @@
 node_modules
 /.local/
 .bun
+.tmp
 .turbo
 .DS_Store
 *.log

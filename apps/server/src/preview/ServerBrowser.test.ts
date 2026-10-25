@@ -267,6 +267,7 @@ let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
 const desktopDetaches = new NodeEvents.EventEmitter();
 const desktopTabs = new Set<string>();
+const visibleDesktopTabs = new Set<string>();
 const desktopRenders = (tabId: string) => {
   if (desktopRendersNext) {
     desktopRendersNext = false;
@@ -330,6 +331,8 @@ const dependencies = Layer.mergeAll(
       ),
     ),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
+    isVisible: (key) => visibleDesktopTabs.has(key.tabId),
+    visibilityChanged: Stream.empty,
     endpoint: (key) =>
       Effect.acquireRelease(Effect.succeed(`ws://desktop/${key.tabId}`), () =>
         Effect.sync(() => releasedDesktopTabs.push(key.tabId)),
@@ -373,10 +376,60 @@ beforeEach(() => {
   keyCopy = "";
   focusedFrame = null;
   desktopTabs.clear();
+  visibleDesktopTabs.clear();
   desktopRendersNext = false;
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
 });
+
+it.live.each([false, true])("reports desktop visibility for native tabs only (%s)", (desktop) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      desktopRendersNext = desktop;
+      const { broker, tabId } = yield* ready;
+      expect(desktopConnections).toHaveLength(desktop ? 1 : 0);
+      visibleDesktopTabs.add(tabId);
+      const visible = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "status",
+        input: {},
+        tabId,
+      });
+      expect(visible.visible).toBe(desktop);
+      expect(visible.tabs).toContainEqual(expect.objectContaining({ tabId, visible: desktop }));
+      visibleDesktopTabs.delete(tabId);
+      const hidden = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "status",
+        input: {},
+        tabId,
+      });
+      expect(hidden.visible).toBe(false);
+      expect(hidden.tabs).toContainEqual(expect.objectContaining({ tabId, visible: false }));
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("snapshot failures report the capture deadline instead of the broker budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      contexts[0]!.page.ariaSnapshot.mockRejectedValue(
+        Object.assign(new Error("Snapshot timed out"), { name: "TimeoutError" }),
+      );
+      const error = yield* broker
+        .invoke<PreviewAutomationSnapshot>({
+          scope,
+          tabId,
+          operation: "snapshot",
+          input: {},
+        })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "PreviewAutomationTimeoutError", timeoutMs: 10_000 });
+      expect(error.message).toBe("Preview automation snapshot timed out after 10000ms.");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 it.live("preview_open reports its navigation timeout instead of the request budget", () =>
   Effect.scoped(

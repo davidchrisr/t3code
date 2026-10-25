@@ -5,9 +5,47 @@ import {
   type CDPSession,
   type Page,
 } from "playwright-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+
+it("reports the snapshot's actual deadline when a CDP command never answers", async () => {
+  vi.useFakeTimers();
+  try {
+    const page = {
+      viewportSize: () => ({ width: 1280, height: 800 }),
+      on: vi.fn(),
+      frames: () => [page],
+      mainFrame: () => page,
+    } as unknown as Page;
+    const cdp = { send: () => new Promise(() => {}) } as unknown as CDPSession;
+    const result = expect(
+      ServerBrowserPage.snapshot({
+        page,
+        cdp,
+        renderScale: 1,
+        consoleEntries: [],
+        networkEntries: [],
+        actionTimeline: [],
+      }),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { timeoutMs: 10_000 },
+    });
+    await Promise.all([result, vi.advanceTimersByTimeAsync(10_000)]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 describe("server browser element refs", () => {
   let browser: Browser;

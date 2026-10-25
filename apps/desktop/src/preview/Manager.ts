@@ -1869,7 +1869,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // Concurrent actions targeted the previous guest; reconcile this one with committed zoom and mute.
     yield* assertTabZoom(tabId);
     yield* assertTabAudioMuted(tabId).pipe(Effect.ignore);
-    runFork(restoreControlSession(tabId, wc));
+    if (registered.serverTab) yield* restoreControlSession(tabId, wc);
+    else runFork(restoreControlSession(tabId, wc));
     yield* emitIfCurrent(tabId, registered);
     // Ownership checks dropped pre-attach audibility events; reconcile through the event path.
     yield* syncTabAudible(tabId, wc, yield* readAudible);
@@ -2300,7 +2301,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
       if (afterAttach.serverTab) {
         yield* listenForAgentPointers;
-        browserHost.attach(afterAttach.serverTab, { webContents: wc, debugger: control.debugger });
+        browserHost.attach(afterAttach.serverTab, {
+          runtimeTabId: tabId,
+          webContents: wc,
+          debugger: control.debugger,
+        });
       }
       if (afterAttach.colorScheme !== "system") {
         yield* attemptPromise({ operation: "applyColorScheme", tabId, webContentsId: wc.id }, () =>

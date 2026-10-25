@@ -5,6 +5,7 @@ import {
   ThreadId,
   type ClientSettings,
   type DesktopPreviewBridge,
+  type DesktopPreviewCaptureActivity,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   closeTab: vi.fn<DesktopPreviewBridge["closeTab"]>(),
   registerWebview: vi.fn<DesktopPreviewBridge["registerWebview"]>(),
   getPreviewConfig: vi.fn<DesktopPreviewBridge["getPreviewConfig"]>(),
+  updatePresentation: vi.fn<NonNullable<DesktopPreviewBridge["updatePresentation"]>>(),
+  captureListeners: new Set<(event: DesktopPreviewCaptureActivity) => void>(),
 }));
 
 vi.mock(import("~/env"), async (original) => ({ ...(await original()), isElectron: true }));
@@ -43,6 +46,11 @@ vi.mock(import("~/components/preview/previewBridge"), async (original) => ({
     closeTab: mocks.closeTab,
     registerWebview: mocks.registerWebview,
     getPreviewConfig: mocks.getPreviewConfig,
+    updatePresentation: mocks.updatePresentation,
+    onCaptureActivity: (listener: (event: DesktopPreviewCaptureActivity) => void) => {
+      mocks.captureListeners.add(listener);
+      return () => mocks.captureListeners.delete(listener);
+    },
   } as never,
 }));
 
@@ -85,6 +93,8 @@ function setup(): Disposable {
     webPreferences: "contextIsolation=yes",
     preloadUrl: null,
   });
+  mocks.updatePresentation.mockReset().mockResolvedValue(undefined);
+  mocks.captureListeners.clear();
   return {
     [Symbol.dispose]() {
       resetPreviewStateForTests();
@@ -114,6 +124,55 @@ async function renderHost() {
 }
 
 describe("ElectronBrowserHost", () => {
+  it("keeps a background guest onscreen until its screenshot completes, without revealing it", async () => {
+    using _state = setup();
+    reconcilePreviewServerSessions(threadRef, {
+      sessions: [snapshot("tab_capture", "2026-01-01T00:00:01.000Z")],
+      serverEpoch: "server-capture",
+      revision: 1,
+    });
+    await using screen = await renderHost();
+    const wrapper = screen.container.querySelector<HTMLElement>("[data-preview-viewport]")!;
+    const tabId = wrapper.dataset.previewViewport!;
+    const guest = wrapper.querySelector("webview");
+    await vi.waitFor(() => expect(wrapper.style.left).toBe("-100000px"));
+    const acknowledgements: Array<{
+      left: string;
+      top: string;
+      rendering: string | undefined;
+      visible: boolean;
+    }> = [];
+    mocks.updatePresentation.mockImplementation(async (input) => {
+      if (input.captureIds.length === 0) return;
+      acknowledgements.push({
+        left: wrapper.style.left,
+        top: wrapper.style.top,
+        rendering: wrapper.dataset.previewRendering,
+        visible: input.visible,
+      });
+    });
+
+    const activity = { tabId, captureId: "capture-1", active: true };
+    for (const listener of mocks.captureListeners) listener(activity);
+    await vi.waitFor(() => {
+      expect(mocks.updatePresentation).toHaveBeenCalledWith({
+        tabId,
+        visible: false,
+        captureIds: [activity.captureId],
+      });
+      expect(acknowledgements).toEqual([
+        { left: "0px", top: "0px", rendering: "active", visible: false },
+      ]);
+    });
+    await act(() => {
+      for (const listener of mocks.captureListeners) listener({ ...activity, active: false });
+    });
+    await vi.waitFor(() => {
+      expect(wrapper.style.left).toBe("-100000px");
+      expect(wrapper.querySelector("webview")).toBe(guest);
+    });
+  });
+
   it("never moves a tab's webview when the server reorders tabs by last update", async () => {
     using _state = setup();
     reconcilePreviewServerSessions(threadRef, {

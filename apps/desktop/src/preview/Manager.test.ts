@@ -1,9 +1,10 @@
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import type {
-  DesktopPreviewRecordingInputEvent,
-  PreviewAnnotationPayload,
-  PreviewAnnotationRect,
+import {
+  DesktopBrowserEvent,
+  type DesktopPreviewRecordingInputEvent,
+  type PreviewAnnotationPayload,
+  type PreviewAnnotationRect,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
@@ -14,6 +15,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -1099,6 +1101,62 @@ describe("PreviewManager", () => {
       },
     };
   };
+
+  effectIt.effect(
+    "preserves presentation reported immediately after delayed guest registration",
+    () =>
+      Effect.gen(function* () {
+        const manager = yield* PreviewManager.PreviewManager;
+        const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const serverTab = { threadId: "thread-1", tabId: "server-tab-registration" };
+        const guest = makeAttachingGuest(49);
+        Object.assign(guest.wc, { hostWebContents: { id: 7 } });
+        fromId.mockReturnValue(guest.wc);
+        const initializationStarted = Promise.withResolvers<void>();
+        const continueInitialization = Promise.withResolvers<void>();
+        const registrationCompleted = yield* Deferred.make<void>();
+        guest.sendCommand.mockImplementation((method) => {
+          if (method === "Emulation.setDefaultBackgroundColorOverride") {
+            initializationStarted.resolve();
+            return continueInitialization.promise;
+          }
+          return Promise.resolve(undefined);
+        });
+        const decodeEvent = Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopBrowserEvent));
+        const events = yield* host.events.pipe(
+          Stream.mapEffect((line) => decodeEvent(new TextDecoder().decode(line))),
+          Stream.takeUntil((event) => event.type === "detached"),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* manager.createTab("tab_initial_registration", { serverTab });
+        const registration = yield* manager.registerWebview("tab_initial_registration", 49).pipe(
+          Effect.tap(() =>
+            Effect.sync(() =>
+              host.updatePresentation(
+                { tabId: "tab_initial_registration", visible: true, captureIds: [] },
+                7,
+              ),
+            ),
+          ),
+          Effect.andThen(Deferred.succeed(registrationCompleted, undefined)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => initializationStarted.promise);
+        yield* TestClock.adjust(0);
+        const completedBeforeInitialization = yield* Deferred.isDone(registrationCompleted);
+        continueInitialization.resolve();
+        yield* Fiber.join(registration);
+        yield* manager.closeTab("tab_initial_registration");
+
+        expect(completedBeforeInitialization).toBe(false);
+        expect(yield* Fiber.join(events)).toEqual([
+          { type: "attached", ...serverTab },
+          { type: "visibility", ...serverTab, visible: true },
+          { type: "detached", ...serverTab },
+        ]);
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
 
   effectIt.effect("reattaches a debugger that Chromium dropped on its own", () =>
     withManager((manager) =>
