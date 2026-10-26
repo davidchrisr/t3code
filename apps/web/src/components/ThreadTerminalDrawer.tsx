@@ -1128,6 +1128,7 @@ function TerminalSessionViewport({
 
 interface ThreadTerminalDrawerProps {
   mode?: "drawer" | "panel";
+  fillContainer?: boolean;
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
   cwd: string;
@@ -1396,6 +1397,7 @@ function TerminalSidebarGroup({
 
 export default function ThreadTerminalDrawer({
   mode = "drawer",
+  fillContainer = false,
   threadRef,
   threadId,
   cwd,
@@ -1426,6 +1428,7 @@ export default function ThreadTerminalDrawer({
 }: ThreadTerminalDrawerProps) {
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
   const isPanel = mode === "panel";
+  const fillsContainer = isPanel || fillContainer;
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1733,7 +1736,7 @@ export default function ThreadTerminalDrawer({
     }
     // The column and window may have resized while the drawer was hidden and
     // not listening, so measure before the first visible paint.
-    const column = isPanel ? null : chatColumnOf(drawerRef.current);
+    const column = fillsContainer ? null : chatColumnOf(drawerRef.current);
     const onWindowResize = () => updateDrawerLayout(column, "window");
     onWindowResize();
     const header = column?.querySelector<HTMLElement>("[data-chat-header]");
@@ -1747,7 +1750,7 @@ export default function ThreadTerminalDrawer({
       stopObserving?.();
       window.removeEventListener("resize", onWindowResize);
     };
-  }, [isPanel, visible]);
+  }, [fillsContainer, visible]);
 
   const syncPreferredHeight = useEffectEvent(() => syncHeight(preferredDrawerHeight));
   useEffect(() => () => syncPreferredHeight(), []);
@@ -1760,11 +1763,11 @@ export default function ThreadTerminalDrawer({
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
         className={cn(
           "relative flex min-w-0 flex-col overflow-hidden bg-background",
-          isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
+          fillsContainer ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
         )}
-        style={isPanel ? undefined : { height: `${drawerHeight}px` }}
+        style={fillsContainer ? undefined : { height: `${drawerHeight}px` }}
       >
-        {!isPanel ? (
+        {!fillsContainer ? (
           <div
             className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
             onPointerDown={handleResizePointerDown}
@@ -1796,11 +1799,11 @@ export default function ThreadTerminalDrawer({
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
       className={cn(
         "relative flex min-w-0 flex-col overflow-hidden bg-background",
-        isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
+        fillsContainer ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
       )}
-      style={isPanel ? undefined : { height: `${drawerHeight}px` }}
+      style={fillsContainer ? undefined : { height: `${drawerHeight}px` }}
     >
-      {!isPanel ? (
+      {!fillsContainer ? (
         <div
           className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
           onPointerDown={handleResizePointerDown}

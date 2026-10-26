@@ -1,8 +1,12 @@
 import { usePreviewPanelInlineSize } from "../../hooks/usePreviewPanelInlineSize";
 import { RightPanelSheet } from "../RightPanelSheet";
 import { RightPanelTabs, type RightPanelTabsProps } from "../RightPanelTabs";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { MobileTerminalSheet } from "../terminal/MobileTerminalSheet";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 
 type ChatRightPanelProps = Omit<RightPanelTabsProps, "mode" | "inlineSize" | "maximized"> & {
+  readonly threadRef: ScopedThreadRef;
   readonly sheet: boolean;
   readonly maximized: boolean;
   readonly workspaceLayoutElement: HTMLElement | null;
@@ -17,7 +21,9 @@ type ChatRightPanelProps = Omit<RightPanelTabsProps, "mode" | "inlineSize" | "ma
  * lives here rather than in ChatView.
  */
 export function ChatRightPanel(props: ChatRightPanelProps) {
+  const mobile = useMediaQuery({ max: "lg", pointer: "coarse" });
   const {
+    threadRef,
     sheet,
     workspaceLayoutElement,
     widthStorageKey,
@@ -31,6 +37,19 @@ export function ChatRightPanel(props: ChatRightPanelProps) {
     container: workspaceLayoutElement,
     widthStorageKey,
   });
+  const activeSurface = tabs.surfaces.find((surface) => surface.id === tabs.activeSurfaceId);
+  if (mobile && activeSurface?.kind === "terminal") {
+    return (
+      <MobileTerminalSheet threadRef={threadRef} open={tabs.open === true}>
+        <RightPanelTabs
+          {...tabs}
+          mode="sheet"
+          inlineSize={inlineSize}
+          layoutControls={layoutControls}
+        />
+      </MobileTerminalSheet>
+    );
+  }
   if (!sheet) {
     return <RightPanelTabs {...tabs} mode="inline" maximized={maximized} inlineSize={inlineSize} />;
   }
