@@ -21,6 +21,7 @@ import {
   expandCollapsedComposerCursor,
   extendReplacementRangeForTrailingSpace,
   formatAssistantCitationForComposer,
+  formatCollapsedComposerPrompt,
   isCollapsedCursorAdjacentToInlineToken,
   isPathSuggestionCurrent,
   replaceTextRange,
@@ -91,6 +92,26 @@ describe("formatAssistantCitationForComposer", () => {
     expect(text).toBe(`${serializeAssistantCitation(boundCitation)} `);
     expect(collectAssistantCitations(text).map((entry) => entry.citation)).toEqual([boundCitation]);
     expect(expandAssistantCitationsForProvider(text)).toMatch(/^\[assistant-quote-1\] \n\n/);
+  });
+});
+
+describe("formatCollapsedComposerPrompt", () => {
+  it("shows a saved citation comment between surrounding prompt text", () => {
+    const savedCitation = { ...citation, comment: "Show an example." };
+    expect(
+      formatCollapsedComposerPrompt(`Before ${serializeAssistantCitation(savedCitation)} after`),
+    ).toBe("Before Show an example. after");
+  });
+
+  it("shows the quote label for citations without comments", () => {
+    expect(formatCollapsedComposerPrompt(`${citationSource} and ${citationSource}`)).toBe(
+      `${citation.text} and ${citation.text}`,
+    );
+  });
+
+  it("preserves ordinary text and incomplete citation links", () => {
+    const prompt = "Please inspect [Assistant quote](t3-citation://v1/incomplete)";
+    expect(formatCollapsedComposerPrompt(prompt)).toBe(prompt);
   });
 });
 

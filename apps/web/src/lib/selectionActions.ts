@@ -47,18 +47,21 @@ export function observeSelectionActions({
   element,
   getActionElement,
   restoreAfterScroll = false,
+  touchSelection = false,
   onSelection,
   onDismiss,
 }: {
   element: HTMLElement;
   getActionElement?: () => HTMLElement | null;
   restoreAfterScroll?: boolean;
+  touchSelection?: boolean;
   onSelection: (pointer: SelectionActionPoint | null) => void;
   onDismiss: (reason: "interaction" | "cancel") => void;
 }) {
   const document = element.ownerDocument;
   const view = document.defaultView!;
   let pointerDown = false;
+  let touchInteraction = false;
   let gestureActive = false;
   let dismissed = false;
   let restorable = false;
@@ -77,6 +80,7 @@ export function observeSelectionActions({
   const cancel = () => {
     cancelPending();
     pointerDown = gestureActive = false;
+    touchInteraction = false;
     pointer = null;
     dismissed = true;
     restorable = false;
@@ -86,6 +90,12 @@ export function observeSelectionActions({
     onDismiss("cancel");
   };
   const onContextMenu = () => {
+    if (touchInteraction) {
+      pointerDown = gestureActive = false;
+      dismissed = false;
+      schedule(0);
+      return;
+    }
     cancel();
     onDismiss("interaction");
   };
@@ -108,6 +118,7 @@ export function observeSelectionActions({
     }
     cancelPending();
     pointerDown = event.button === 0;
+    touchInteraction = false;
     const inside = element.contains(event.target as Node);
     gestureActive = false;
     dismissed = true;
@@ -120,12 +131,27 @@ export function observeSelectionActions({
     if (!event.isPrimary) return;
     const target = event.target as Element | null;
     if (target?.closest("button, [role=button]")) return;
+    if (touchSelection && event.pointerType === "touch") {
+      touchInteraction = true;
+      pointerDown = gestureActive = dismissed = false;
+      return;
+    }
     gestureActive = event.button === 0 && !event.defaultPrevented;
     dismissed = !gestureActive;
   };
   const onPointerUp = (event: PointerEvent) => {
     // Preventing pointerdown (for example on a toolbar) can suppress mouseup.
     if (event.isPrimary && event.button === 0) pointerDown = false;
+    if (touchInteraction && event.pointerType === "touch") schedule(0);
+  };
+  const onPointerCancel = (event: PointerEvent) => {
+    if (touchInteraction && event.pointerType === "touch") {
+      pointerDown = gestureActive = false;
+      dismissed = false;
+      schedule(0);
+    } else {
+      dismiss();
+    }
   };
   const onMouseUp = (event: MouseEvent) => {
     if (event.button !== 0) return;
@@ -165,7 +191,7 @@ export function observeSelectionActions({
   element.addEventListener("pointerdown", onSelectionStart);
   view.addEventListener("pointerup", onPointerUp);
   view.addEventListener("mouseup", onMouseUp);
-  view.addEventListener("pointercancel", dismiss);
+  view.addEventListener("pointercancel", onPointerCancel);
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("focusin", onFocusIn);
   element.addEventListener("contextmenu", onContextMenu, true);
@@ -192,7 +218,7 @@ export function observeSelectionActions({
       element.removeEventListener("pointerdown", onSelectionStart);
       view.removeEventListener("pointerup", onPointerUp);
       view.removeEventListener("mouseup", onMouseUp);
-      view.removeEventListener("pointercancel", dismiss);
+      view.removeEventListener("pointercancel", onPointerCancel);
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("focusin", onFocusIn);
       element.removeEventListener("contextmenu", onContextMenu, true);

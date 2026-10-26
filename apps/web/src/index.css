@@ -1664,6 +1664,12 @@ body {
   overscroll-behavior: none;
 }
 
+:root {
+  --visual-viewport-height: 100dvh;
+  --visual-viewport-top: 0px;
+  --visual-viewport-bottom: 0px;
+}
+
 body {
   height: 100%;
   overflow: hidden;
@@ -1683,6 +1689,25 @@ body {
 
 .electron-windows {
   --desktop-window-right-resize-inset: 6px;
+}
+
+.pwa-status-bar-background {
+  display: none;
+}
+
+@media (display-mode: standalone) and (pointer: coarse) {
+  @supports (-webkit-touch-callout: none) {
+    .pwa-status-bar-background {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 40;
+      display: block;
+      /* WebKit only samples a fixed edge's background color above 10px thick. */
+      height: 11px;
+      pointer-events: none;
+      background-color: var(--background);
+    }
+  }
 }
 
 /* App-chrome grain. Baked into each surface's own background (behind

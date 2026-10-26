@@ -35,14 +35,15 @@ function SheetViewport({
   ...props
 }: SheetPrimitive.Viewport.Props & {
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset";
+  variant?: "default" | "inset" | "fullscreen";
 }) {
   return (
     <SheetPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-(--z-sheet) grid",
-        side === "bottom" && "grid grid-rows-[1fr_auto] pt-12",
-        side === "top" && "grid grid-rows-[auto_1fr] pb-12",
+        "fixed inset-x-0 top-(--visual-viewport-top) z-(--z-sheet) grid h-(--visual-viewport-height)",
+        variant === "fullscreen" && "z-50",
+        variant !== "fullscreen" && side === "bottom" && "grid grid-rows-[1fr_auto] pt-12",
+        variant !== "fullscreen" && side === "top" && "grid grid-rows-[auto_1fr] pb-12",
         side === "left" && "flex justify-start",
         side === "right" && "flex justify-end",
         variant === "inset" && "sm:p-4",
@@ -69,7 +70,7 @@ function SheetPopup({
   keepMounted?: boolean;
   transitionDurationMs?: number;
   side?: "right" | "left" | "top" | "bottom";
-  variant?: "default" | "inset";
+  variant?: "default" | "inset" | "fullscreen";
 }) {
   const transitionStyle =
     transitionDurationMs === undefined
@@ -80,27 +81,32 @@ function SheetPopup({
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop
-        className={
-          instant
-            ? "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!"
-            : undefined
-        }
+        className={cn(
+          variant === "fullscreen" && "z-50",
+          instant &&
+            "transition-none! data-ending-style:opacity-100! data-starting-style:opacity-100!",
+        )}
         style={transitionStyle}
       />
       <SheetViewport side={side} variant={variant}>
         <SheetPrimitive.Popup
           className={cn(
             "relative flex max-h-full min-h-0 w-full min-w-0 flex-col bg-popover not-dark:bg-clip-padding text-popover-foreground shadow-lg/5 transition-[opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:opacity-0 data-starting-style:opacity-0 max-sm:before:hidden dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
-            side === "bottom" &&
+            variant !== "fullscreen" &&
+              side === "bottom" &&
               "row-start-2 border-t data-ending-style:translate-y-8 data-starting-style:translate-y-8",
-            side === "top" &&
+            variant !== "fullscreen" &&
+              side === "top" &&
               "data-ending-style:-translate-y-8 data-starting-style:-translate-y-8 border-b",
-            side === "left" &&
+            variant !== "fullscreen" &&
+              side === "left" &&
               "data-ending-style:-translate-x-8 data-starting-style:-translate-x-8 w-[calc(100%-(--spacing(12)))] max-w-md border-e",
-            side === "right" &&
+            variant !== "fullscreen" &&
+              side === "right" &&
               "col-start-2 w-[calc(100%-(--spacing(12)))] max-w-md border-s data-ending-style:translate-x-8 data-starting-style:translate-x-8",
             variant === "inset" &&
               "before:hidden sm:rounded-2xl sm:border sm:before:rounded-[calc(var(--radius-2xl)-1px)] sm:**:data-[slot=sheet-footer]:rounded-b-[calc(var(--radius-2xl)-1px)]",
+            variant === "fullscreen" && "h-full w-full max-w-none border-0",
             instant &&
               "transition-none! will-change-auto! data-ending-style:translate-x-0! data-starting-style:translate-x-0! data-ending-style:translate-y-0! data-starting-style:translate-y-0! data-ending-style:opacity-100! data-starting-style:opacity-100!",
             className,

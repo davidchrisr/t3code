@@ -31,6 +31,8 @@ import { resolveAssistantCitationCommentDismissal } from "./assistantCitationCom
 import { observeAssistantCitationCommentSource } from "./AssistantCitationSource";
 import { composerFloatingLayerProps } from "./composerEventScope";
 import { observeResize } from "~/lib/observeResize";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 
 export function AssistantCitationChip({
   citation,
@@ -50,6 +52,7 @@ export function AssistantCitationChip({
     onRestoreFocus?: () => void;
   };
 }) {
+  const touch = useMediaQuery({ pointer: "coarse" });
   const navigate = useNavigate();
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const commentPopupRef = useRef<HTMLDivElement>(null);
@@ -152,6 +155,47 @@ export function AssistantCitationChip({
       </ContextChipPopover>
     );
   }
+  const editor = commentEditor ? (
+    <AssistantCitationCommentEditor
+      key={serializeAssistantCitation(citation)}
+      citation={citation}
+      inputRef={commentInputRef}
+      layout={touch ? "sheet" : "popover"}
+      onDraftChange={(comment) => {
+        draftCommentRef.current = comment;
+        commentEditor.onDraftChange?.(comment);
+      }}
+      onSubmit={(comment) => {
+        if (!commentEditor.onSave(comment)) return false;
+        commentEditor.onOpenChange(false);
+        return true;
+      }}
+      {...(commentEditor.onSaveAndSend
+        ? {
+            onSubmitAndSend: (comment: string) => {
+              if (!commentEditor.onSaveAndSend?.(comment)) return false;
+              commentEditor.onOpenChange(false);
+              return true;
+            },
+          }
+        : {})}
+      onCancel={() => {
+        if (commentEditor.onCancel) commentEditor.onCancel();
+        else commentEditor.onOpenChange(false);
+      }}
+    />
+  ) : null;
+  const finalFocus = commentEditor?.onRestoreFocus
+    ? () => {
+        const activeElement = document.activeElement;
+        if (
+          activeElement === document.body ||
+          (activeElement !== null && commentPopupRef.current?.contains(activeElement))
+        )
+          commentEditor.onRestoreFocus?.();
+        return false;
+      }
+    : undefined;
   return (
     <ContextChip
       kind="citation"
@@ -160,7 +204,54 @@ export function AssistantCitationChip({
       data-markdown-copy={serializeAssistantCitation(citation)}
     >
       {composerSourceLink}
-      {commentEditor ? (
+      {commentEditor && touch ? (
+        <>
+          <ContextChipAction
+            aria-label={citation.comment ? "Edit citation comment" : "Add comment to citation"}
+            data-citation-comment-trigger="true"
+            onClick={() => commentEditor.onOpenChange(true)}
+          >
+            <PencilIcon aria-hidden="true" />
+          </ContextChipAction>
+          <Sheet
+            open={commentEditor.open}
+            onOpenChange={(open, eventDetails) => {
+              if (!open && !settleDraftOnClose(eventDetails.reason)) {
+                eventDetails.cancel();
+                return;
+              }
+              commentEditor.onOpenChange(open);
+            }}
+          >
+            {commentEditor.open ? (
+              <SheetPopup
+                {...composerFloatingLayerProps}
+                ref={commentPopupRef}
+                side="bottom"
+                variant="fullscreen"
+                showCloseButton={false}
+                transitionDurationMs={0}
+                initialFocus={() => {
+                  commentInputRef.current?.focus({ preventScroll: true });
+                  return false;
+                }}
+                finalFocus={finalFocus}
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <div className="flex min-h-0 flex-1 flex-col pb-safe pt-safe">
+                  <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+                    <SheetTitle>Respond to citation</SheetTitle>
+                    <blockquote className="max-h-[15%] shrink-0 overflow-auto border-l-2 border-border pl-3 text-sm text-muted-foreground">
+                      {citation.text}
+                    </blockquote>
+                    {editor}
+                  </div>
+                </div>
+              </SheetPopup>
+            ) : null}
+          </Sheet>
+        </>
+      ) : commentEditor ? (
         <Popover
           open={commentEditor.open}
           onOpenChange={(open, eventDetails) => {
@@ -188,56 +279,14 @@ export function AssistantCitationChip({
                 commentInputRef.current?.focus({ preventScroll: true });
                 return false;
               }}
-              finalFocus={
-                commentEditor.onRestoreFocus
-                  ? () => {
-                      const activeElement = document.activeElement;
-                      if (
-                        activeElement === document.body ||
-                        (activeElement !== null && commentPopupRef.current?.contains(activeElement))
-                      ) {
-                        commentEditor.onRestoreFocus?.();
-                      }
-                      return false;
-                    }
-                  : undefined
-              }
+              finalFocus={finalFocus}
               ref={commentPopupRef}
               aria-label="Edit citation comment"
               width="md"
               padding="compact"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <AssistantCitationCommentEditor
-                key={serializeAssistantCitation(citation)}
-                citation={citation}
-                inputRef={commentInputRef}
-                onDraftChange={(comment) => {
-                  draftCommentRef.current = comment;
-                  commentEditor.onDraftChange?.(comment);
-                }}
-                onSubmit={(comment) => {
-                  if (!commentEditor.onSave(comment)) return false;
-                  commentEditor.onOpenChange(false);
-                  return true;
-                }}
-                {...(commentEditor.onSaveAndSend
-                  ? {
-                      onSubmitAndSend: (comment: string) => {
-                        if (!commentEditor.onSaveAndSend?.(comment)) return false;
-                        commentEditor.onOpenChange(false);
-                        return true;
-                      },
-                    }
-                  : {})}
-                onCancel={() => {
-                  if (commentEditor.onCancel) {
-                    commentEditor.onCancel();
-                  } else {
-                    commentEditor.onOpenChange(false);
-                  }
-                }}
-              />
+              {editor}
             </PopoverPopup>
           ) : null}
         </Popover>

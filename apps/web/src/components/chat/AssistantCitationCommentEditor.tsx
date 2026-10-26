@@ -2,6 +2,7 @@ import { ASSISTANT_CITATION_MAX_COMMENT_LENGTH, type AssistantCitation } from "@
 import { useState, type Ref } from "react";
 
 import { Button } from "../ui/button";
+import { cn } from "~/lib/utils";
 
 export function AssistantCitationCommentEditor({
   citation,
@@ -10,6 +11,7 @@ export function AssistantCitationCommentEditor({
   onSubmitAndSend,
   onCancel,
   onDraftChange,
+  layout = "popover",
 }: {
   citation: AssistantCitation;
   inputRef?: Ref<HTMLTextAreaElement>;
@@ -17,6 +19,7 @@ export function AssistantCitationCommentEditor({
   onSubmitAndSend?: (comment: string) => boolean;
   onCancel: () => void;
   onDraftChange?: (comment: string) => void;
+  layout?: "popover" | "sheet";
 }) {
   const [comment, setComment] = useState(citation.comment ?? "");
   const commentTooLong = comment.length > ASSISTANT_CITATION_MAX_COMMENT_LENGTH;
@@ -34,6 +37,7 @@ export function AssistantCitationCommentEditor({
 
   return (
     <div
+      className={layout === "sheet" ? "flex min-h-0 flex-1 flex-col" : undefined}
       data-citation-comment-editor="true"
       onKeyDown={(event) => {
         event.stopPropagation();
@@ -51,7 +55,10 @@ export function AssistantCitationCommentEditor({
         aria-invalid={commentTooLong || undefined}
         placeholder="Add an optional comment..."
         rows={2}
-        className="field-sizing-content block max-h-40 min-h-16 w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm"
+        className={cn(
+          "block w-full resize-none bg-transparent px-1 py-1.5 text-base outline-none placeholder:text-muted-foreground sm:text-sm",
+          layout === "sheet" ? "min-h-0 flex-1" : "field-sizing-content max-h-40 min-h-16",
+        )}
         value={comment}
         onChange={(event) => {
           setComment(event.currentTarget.value);
@@ -79,7 +86,7 @@ export function AssistantCitationCommentEditor({
           characters.
         </p>
       ) : null}
-      <div className="mt-2 flex items-center justify-end gap-2">
+      <div className="mt-2 flex shrink-0 items-center justify-end gap-2">
         <Button
           variant="outline"
           size="xs"

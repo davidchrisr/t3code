@@ -4,9 +4,9 @@ import {
   type AssistantCitation,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { QuoteIcon } from "lucide-react";
+import { CopyIcon, QuoteIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   captureAssistantTextSelection,
   type AssistantCitationSourceAnchor,
@@ -18,6 +18,9 @@ import {
   type SelectionActionPoint,
 } from "~/lib/selectionActions";
 import { Button } from "../ui/button";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { toastManager } from "../ui/toast";
 
 export function AssistantSelectionToolbar({
   viewport,
@@ -28,21 +31,37 @@ export function AssistantSelectionToolbar({
   threadRef: ScopedThreadRef;
   onCite: (citation: AssistantCitation, sourceAnchor: AssistantCitationSourceAnchor) => boolean;
 }) {
+  const touch = useMediaQuery({ pointer: "coarse" });
   const [selection, setSelection] = useState<{
     citation: AssistantCitation;
     position: SelectionActionPoint;
     sourceAnchor: AssistantCitationSourceAnchor;
   } | null>(null);
-  const toolbarRef = useRef<HTMLButtonElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
+  const { copyToClipboard } = useCopyToClipboard({
+    target: "selected assistant text",
+    timeout: 0,
+    onCopy: () => {
+      window.getSelection()?.removeAllRanges();
+      actionsRef.current?.cancel();
+      setSelection(null);
+    },
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: "Could not copy selection",
+        description: error.message,
+      }),
+  });
 
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
-    if (!toolbar || !selection) return;
+    if (!toolbar || !selection || touch) return;
     const rect = toolbar.getBoundingClientRect();
     toolbar.style.left = `${Math.max(8, Math.min(selection.position.x, window.innerWidth - rect.width - 8))}px`;
     toolbar.style.top = `${Math.max(8, Math.min(selection.position.y, window.innerHeight - rect.height - 8))}px`;
-  }, [selection]);
+  }, [selection, touch]);
 
   useEffect(() => {
     if (!viewport) return;
@@ -137,6 +156,7 @@ export function AssistantSelectionToolbar({
       element: viewport,
       getActionElement: () => toolbarRef.current,
       restoreAfterScroll: true,
+      touchSelection: touch,
       onSelection: update,
       onDismiss: clear,
     });
@@ -156,10 +176,11 @@ export function AssistantSelectionToolbar({
       ) {
         return;
       }
-      if (toolbar.disabled) return;
+      const action = toolbar.querySelector<HTMLButtonElement>("button:not(:disabled)");
+      if (!action) return;
       event.preventDefault();
       event.stopPropagation();
-      toolbar.focus({ preventScroll: true });
+      action.focus({ preventScroll: true });
     };
     document.addEventListener("keydown", focusActions, true);
     document.addEventListener("selectionchange", actions.selectionChanged);
@@ -169,7 +190,7 @@ export function AssistantSelectionToolbar({
       actions.dispose();
       actionsRef.current = null;
     };
-  }, [threadRef, viewport]);
+  }, [threadRef, touch, viewport]);
 
   if (!selection) return null;
   const tooLong = selection.citation.text.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH;
@@ -178,23 +199,36 @@ export function AssistantSelectionToolbar({
     setSelection(null);
   };
   const cite = () => {
-    if (tooLong || !onCite(selection.citation, selection.sourceAnchor)) return false;
+    if (tooLong) return false;
+    let inserted = false;
+    const insert = () => {
+      inserted = onCite(selection.citation, selection.sourceAnchor);
+    };
+    // Commit the input during the tap so Safari permits opening the software keyboard.
+    if (touch) flushSync(insert);
+    else insert();
+    if (!inserted) return false;
     window.getSelection()?.removeAllRanges();
     dismiss();
+    if (touch) {
+      document
+        .querySelector<HTMLTextAreaElement>("[data-citation-comment-editor] textarea")
+        ?.focus({ preventScroll: true });
+    }
     return true;
   };
   return createPortal(
-    <Button
+    <div
       ref={toolbarRef}
-      type="button"
-      size="xs"
-      variant="glass"
-      disabled={tooLong}
-      aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
-      className="fixed z-50 max-w-[calc(100vw-1rem)]"
-      style={{ left: selection.position.x, top: selection.position.y }}
+      role="group"
+      aria-label="Selected text actions"
+      className={
+        touch
+          ? "fixed inset-x-3 bottom-[calc(var(--visual-viewport-bottom)+max(env(safe-area-inset-bottom),--spacing(3)))] z-50 mx-auto flex max-w-sm items-center justify-end gap-3 rounded-xl border bg-popover p-3 shadow-lg"
+          : "fixed z-50 max-w-[calc(100vw-1rem)]"
+      }
+      style={touch ? undefined : { left: selection.position.x, top: selection.position.y }}
       onPointerDown={(event) => event.preventDefault()}
-      onClick={cite}
       onKeyDown={(event) => {
         event.stopPropagation();
         if (event.key === "Escape" && !event.nativeEvent.isComposing) {
@@ -203,9 +237,27 @@ export function AssistantSelectionToolbar({
         }
       }}
     >
-      <QuoteIcon aria-hidden="true" className="size-3.5" />
-      {tooLong ? "Shorten selection" : "Cite"}
-    </Button>,
+      {touch ? (
+        <Button
+          variant="outline"
+          onClick={() => copyToClipboard(selection.citation.text, undefined)}
+        >
+          <CopyIcon aria-hidden="true" />
+          Copy
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        size={touch ? "default" : "xs"}
+        variant={touch ? "default" : "glass"}
+        disabled={tooLong}
+        aria-label={tooLong ? "Selection is too long to cite" : "Cite selection in composer"}
+        onClick={cite}
+      >
+        <QuoteIcon aria-hidden="true" className="size-3.5" />
+        {tooLong ? "Shorten selection" : "Cite"}
+      </Button>
+    </div>,
     document.body,
   );
 }

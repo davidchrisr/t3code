@@ -65,6 +65,9 @@ import {
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useVisualViewportVariables } from "../hooks/useVisualViewportVariables";
+import { useMobileSidebarSwipe } from "../hooks/useMobileSidebarSwipe";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "var(--desktop-window-controls-inset, 90px)";
 
@@ -129,7 +132,8 @@ function readInitialThreadSidebarWidth(): number {
 function SidebarControl() {
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
+  const { toggleSidebar, isMobile, mobileSheetMounted, openMobile, setOpenMobile } = useSidebar();
+  useMobileSidebarSwipe({ enabled: isMobile, open: openMobile, onOpenChange: setOpenMobile });
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
@@ -329,6 +333,8 @@ function ProjectProjectionRetention() {
 }
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
+  const touchViewport = useMediaQuery({ pointer: "coarse" });
+  useVisualViewportVariables(touchViewport && !isElectron);
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const [sidebarRouteReveal] = useState<SidebarRouteReveal>(() => ({
@@ -400,6 +406,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         defaultOpen
         style={sidebarProviderStyle}
       >
+        <div aria-hidden="true" className="pwa-status-bar-background" />
         <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
         <ProjectProjectionRetention />
         <Sidebar
