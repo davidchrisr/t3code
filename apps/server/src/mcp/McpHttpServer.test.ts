@@ -420,15 +420,17 @@ it.effect.each(["limit", "runLimit", "maxCharsPerItem"])(
   },
 );
 
-it("routes same-child follow-ups to t3_thread_send and independent reviews to delegate_task", () => {
-  const description = OrchestratorToolkit.tools.delegate_task.description ?? "";
-  expect(description).toContain(
-    "For independent T3 delegated review rounds, call delegate_task again",
+it("describes child creation and continuation without prescribing review policy", () => {
+  const delegation = OrchestratorToolkit.tools.delegate_task.description ?? "";
+  const continuation = OrchestratorToolkit.tools.t3_thread_send.description ?? "";
+  expect(delegation).toContain("Each accepted delegation creates a child thread and task.");
+  expect(delegation).toContain("t3_thread_send can continue an existing child thread.");
+  expect(continuation).toContain(
+    "Sending to a delegated task's childThreadId continues that child's conversation.",
   );
-  expect(description).toContain(
-    "For a follow-up that needs the same child's conversation, use t3_thread_send on its childThreadId.",
-  );
-  expect(description).not.toContain("not the target for starting another");
+  expect(delegation).not.toContain("independent T3 delegated review rounds");
+  expect(delegation).not.toContain("Prefer native subagent tools");
+  expect(continuation).not.toContain("independent review rounds");
 });
 
 it.effect(
