@@ -43,7 +43,7 @@ describe("Codex runtime context", () => {
 });
 
 describe("Codex orchestration context", () => {
-  it("routes same-child follow-ups to t3_thread_send and independent reviews to delegate_task", () => {
+  it("prefers reusing native and T3-owned children for related follow-ups", () => {
     const orchestration = Object.entries(buildCodexAdditionalContext({ model: "gpt-6.1-sol" }))
       .filter(([key]) => key.startsWith("t3_code_orchestration_"))
       .map(([, entry]) => entry.value)
@@ -51,12 +51,17 @@ describe("Codex orchestration context", () => {
 
     NodeAssert.ok(
       orchestration.includes(
-        "For independent T3 delegated review rounds, call `delegate_task` again.",
+        "Prefer reusing an existing child for related follow-up work, including revisions, fixes, and follow-up reviews.",
       ),
     );
     NodeAssert.ok(
       orchestration.includes(
-        "For a follow-up that needs the same child's conversation, use `t3_thread_send` on its `childThreadId`.",
+        "Continue native subagents through their provider's continuation tool, and T3-owned children through `t3_thread_send` on their `childThreadId`.",
+      ),
+    );
+    NodeAssert.ok(
+      orchestration.includes(
+        "Start a new child for unrelated work or when a fresh, independent review is explicitly intended.",
       ),
     );
     NodeAssert.ok(!orchestration.includes("Do not use `t3_thread_send`"));
