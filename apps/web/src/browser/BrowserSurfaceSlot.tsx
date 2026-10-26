@@ -11,6 +11,7 @@ export function BrowserSurfaceSlot(props: {
   readonly layoutVersion?: string | number;
   readonly className?: string;
   readonly fitSourceContent?: boolean;
+  readonly interactive?: boolean;
 }) {
   const {
     tabId,
@@ -20,9 +21,10 @@ export function BrowserSurfaceSlot(props: {
     layoutVersion,
     className,
     fitSourceContent = false,
+    interactive = true,
   } = props;
   const elementRef = useRef<HTMLDivElement | null>(null);
-  const presentationRef = useRef({ visible, cornerRadius, zIndex });
+  const presentationRef = useRef({ visible, cornerRadius, zIndex, interactive });
   const updateRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
@@ -42,6 +44,7 @@ export function BrowserSurfaceSlot(props: {
         presentation.visible && rect.width > 0 && rect.height > 0,
         presentation.cornerRadius,
         presentation.zIndex,
+        presentation.interactive,
       );
       if (presentation.visible && !presented) {
         lease.release();
@@ -56,6 +59,7 @@ export function BrowserSurfaceSlot(props: {
           rect.width > 0 && rect.height > 0,
           presentation.cornerRadius,
           presentation.zIndex,
+          presentation.interactive,
         );
       }
     };
@@ -80,10 +84,11 @@ export function BrowserSurfaceSlot(props: {
   }, [fitSourceContent, tabId]);
 
   useLayoutEffect(() => {
-    presentationRef.current = { visible, cornerRadius, zIndex };
+    presentationRef.current = { visible, cornerRadius, zIndex, interactive };
     updateRef.current?.();
   }, [
     cornerRadius,
+    interactive,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A layoutVersion bump means the slot moved without resizing, so it re-presents at the new position.
     layoutVersion,
     visible,

@@ -137,6 +137,7 @@ export function ServerBrowserSurface(props: {
   readonly tabId: string;
   readonly visible: boolean;
   readonly followSize?: boolean;
+  readonly interactive?: boolean;
   readonly controlPosition?: "top" | "bottom";
   readonly onFirstFrame?: () => void;
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
@@ -152,6 +153,7 @@ export function ServerBrowserSurface(props: {
     tabId,
     visible,
     followSize = true,
+    interactive = true,
     controlPosition = "top",
     onFirstFrame,
     onViewport,
@@ -262,7 +264,13 @@ export function ServerBrowserSurface(props: {
   const pagePoint = (clientX: number, clientY: number, clamp: boolean): PagePoint | null => {
     const canvas = canvasRef.current;
     const viewport = viewportRef.current;
-    if (!canvas || !viewport || !hasFrameRef.current || controlRef.current?.controller !== "you")
+    if (
+      !interactive ||
+      !canvas ||
+      !viewport ||
+      !hasFrameRef.current ||
+      controlRef.current?.controller !== "you"
+    )
       return null;
     const rect = canvas.getBoundingClientRect();
     const fit = Math.min(rect.width / canvas.width, rect.height / canvas.height);
@@ -364,7 +372,7 @@ export function ServerBrowserSurface(props: {
       firstFrame();
     });
     const client = createPreviewStreamClient(
-      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
+      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height, interactive },
       {
         onFrame: (jpeg) => {
           unauthorizedRef.current = 0;
@@ -453,6 +461,7 @@ export function ServerBrowserSurface(props: {
     environmentId,
     followSize,
     hostSetup,
+    interactive,
     tabId,
     threadId,
     visible,
@@ -492,7 +501,7 @@ export function ServerBrowserSurface(props: {
   );
 
   const handlePointer = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (controlRef.current?.controller !== "you") return;
+    if (!interactive || controlRef.current?.controller !== "you") return;
     const { type, pointerId, clientX, clientY } = event;
     const cancelled = type === "pointercancel";
     const touch = touchRef.current;
@@ -641,7 +650,7 @@ export function ServerBrowserSurface(props: {
   };
 
   const handleKey = (action: "down" | "up", event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (controlRef.current?.controller !== "you") return;
+    if (!interactive || controlRef.current?.controller !== "you") return;
     keySentRef.current = false;
     if (
       event.nativeEvent.isComposing ||
@@ -706,29 +715,32 @@ export function ServerBrowserSurface(props: {
     <div
       className={cn("relative flex flex-col overflow-hidden", className)}
       data-server-browser-surface={tabId}
+      inert={!interactive}
     >
-      <div
-        className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
-          controlPosition === "bottom" ? "order-last border-t" : "border-b",
-        )}
-      >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control)}
-        </span>
-        {control?.canOperate ? (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={control.controller === "another-viewer"}
-            onClick={() =>
-              send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-            }
-          >
-            {control.controller === "you" ? "Release control" : "Take control"}
-          </Button>
-        ) : null}
-      </div>
+      {interactive ? (
+        <div
+          className={cn(
+            "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
+            controlPosition === "bottom" ? "order-last border-t" : "border-b",
+          )}
+        >
+          <span role="status" className="text-xs text-muted-foreground">
+            {previewStreamControlLabel(control)}
+          </span>
+          {control?.canOperate ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={control.controller === "another-viewer"}
+              onClick={() =>
+                send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
+              }
+            >
+              {control.controller === "you" ? "Release control" : "Take control"}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="relative min-h-0 flex-1">
         {pdfUrl ? (
           <embed
@@ -763,7 +775,7 @@ export function ServerBrowserSurface(props: {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          disabled={pdfUrl !== null || control?.controller !== "you"}
+          disabled={!interactive || pdfUrl !== null || control?.controller !== "you"}
           defaultValue={INPUT_SENTINEL}
           onFocus={(event) => resetInput(event.currentTarget)}
           className="sr-only top-0 left-0 text-base"

@@ -97,6 +97,7 @@ export function HostedBrowserWebview(props: {
         fittedSourceContent: current?.fittedSourceContent ?? null,
         rect: resolveBrowserSurfacePanelRect(state.byTabId, runtimeTabId),
         visible: current?.visible ?? false,
+        interactive: current?.interactive ?? true,
         zIndex: current?.zIndex ?? 30,
       };
     }),
@@ -356,8 +357,13 @@ export function HostedBrowserWebview(props: {
   return (
     <div
       ref={wrapperRef}
+      inert={!presentation.interactive}
       className="fixed overflow-hidden bg-muted/35"
-      style={{ ...wrapperStyle, overscrollBehavior: "contain" }}
+      style={{
+        ...wrapperStyle,
+        overscrollBehavior: "contain",
+        ...(!presentation.interactive ? { pointerEvents: "none" } : {}),
+      }}
       onScroll={syncContentPresentation}
       data-preview-rendering={renderingActive ? "active" : "suspended"}
       data-preview-viewport={runtimeTabId}
