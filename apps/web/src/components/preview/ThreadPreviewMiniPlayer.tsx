@@ -231,6 +231,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               pdfUrl={pdfUrl}
               visible
               followSize={false}
+              interactive={false}
               controlPosition="bottom"
               onViewport={setStreamViewport}
               onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "floating")}
@@ -245,6 +246,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               cornerRadius={PREVIEW_MINI_PLAYER_CORNER_RADIUS}
               zIndex={PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX}
               fitSourceContent
+              interactive={false}
               layoutVersion={`${frame.x}:${frame.y}`}
               className="absolute inset-0"
             />

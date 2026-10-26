@@ -68,4 +68,19 @@ describe("browserSurfaceStore", () => {
       visible: true,
     });
   });
+
+  it("restores input when a view-only floating surface returns to the panel", () => {
+    const tabId = "view-only-browser";
+    const rect = { x: 0, y: 0, width: 320, height: 240 };
+    const floating = acquireBrowserSurface(tabId, true);
+    floating.present(rect, true, 12, 48, false);
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]?.interactive).toBe(false);
+
+    const panel = acquireBrowserSurface(tabId);
+    panel.present(rect, true);
+    floating.present(rect, true, 12, 48, false);
+    floating.release();
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]?.interactive).toBe(true);
+    panel.release();
+  });
 });

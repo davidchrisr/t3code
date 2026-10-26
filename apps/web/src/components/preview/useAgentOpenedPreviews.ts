@@ -1,7 +1,7 @@
 import type { DeviceServiceState, ScopedThreadRef } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { useEffect, useRef } from "react";
-import { useClientSettings } from "../../hooks/useSettings";
+import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings";
 import {
   browserMiniPlayerSource,
   usePreviewMiniPlayerStore,
@@ -35,6 +35,7 @@ export function useAgentOpenedPreviews(input: {
     sheetLayout,
   } = input;
   const autoShowFloatingPreview = useClientSettings(selectAutoShowFloatingPreview);
+  const settingsHydrated = useClientSettingsHydrated();
   // Baseline sessions to preserve dismissals on reload; missing device summaries must remain eligible to open
   // later.
   const previousDeviceSessions = useRef(new Map<string, Set<string>>());
@@ -50,6 +51,7 @@ export function useAgentOpenedPreviews(input: {
         (entry) => entry.hostId === session.hostId && entry.id === session.deviceId,
       );
     const previous = previousDeviceSessions.current.get(threadKey);
+    if (previous && !settingsHydrated) return;
     previousDeviceSessions.current.set(
       threadKey,
       new Set(sessions.filter((session) => deviceFor(session) !== undefined).map(key)),
@@ -83,6 +85,7 @@ export function useAgentOpenedPreviews(input: {
   }, [
     threadRef,
     autoShowFloatingPreview,
+    settingsHydrated,
     deviceStateLoaded,
     sheetLayout,
     deviceState.sessions,
@@ -97,6 +100,7 @@ export function useAgentOpenedPreviews(input: {
       (session) => session.runtime === "server",
     );
     const previous = previousServerPreviewTabs.current.get(threadKey);
+    if (previous && !settingsHydrated) return;
     previousServerPreviewTabs.current.set(
       threadKey,
       new Map(serverSessions.map((session) => [session.tabId, session.revealRequest?.id])),
@@ -108,13 +112,12 @@ export function useAgentOpenedPreviews(input: {
         ? previous.get(session.tabId) !== requested.id
         : !previous.has(session.tabId);
       if (!fresh || session.reveal !== true) continue;
-      if (!autoShowFloatingPreview && requested?.force !== true) continue;
       const surface = panelSurfaces.find(
         (surface) => surface.kind === "preview" && surface.resourceId === session.tabId,
       );
       if (surface && requested?.force === true) {
         useRightPanelStore.getState().activateSurface(threadRef, surface.id);
-      } else if (!surface) {
+      } else if (!surface && autoShowFloatingPreview) {
         usePreviewMiniPlayerStore
           .getState()
           .open(threadRef, browserMiniPlayerSource(session.tabId));
@@ -126,6 +129,7 @@ export function useAgentOpenedPreviews(input: {
     previewState.sessions,
     threadRef,
     autoShowFloatingPreview,
+    settingsHydrated,
     panelSurfaces,
   ]);
   useEffect(() => {
