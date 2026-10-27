@@ -5,7 +5,6 @@ import {
   ThreadId,
   type ClientSettings,
   type DesktopPreviewBridge,
-  type DesktopPreviewCaptureActivity,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -20,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   registerWebview: vi.fn<DesktopPreviewBridge["registerWebview"]>(),
   getPreviewConfig: vi.fn<DesktopPreviewBridge["getPreviewConfig"]>(),
   updatePresentation: vi.fn<NonNullable<DesktopPreviewBridge["updatePresentation"]>>(),
-  captureListeners: new Set<(event: DesktopPreviewCaptureActivity) => void>(),
 }));
 
 vi.mock(import("~/env"), async (original) => ({ ...(await original()), isElectron: true }));
@@ -47,10 +45,6 @@ vi.mock(import("~/components/preview/previewBridge"), async (original) => ({
     registerWebview: mocks.registerWebview,
     getPreviewConfig: mocks.getPreviewConfig,
     updatePresentation: mocks.updatePresentation,
-    onCaptureActivity: (listener: (event: DesktopPreviewCaptureActivity) => void) => {
-      mocks.captureListeners.add(listener);
-      return () => mocks.captureListeners.delete(listener);
-    },
   } as never,
 }));
 
@@ -66,6 +60,7 @@ import {
 import { reconcilePreviewServerSessions, resetPreviewStateForTests } from "~/previewStateStore";
 import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 import { ElectronBrowserHost } from "./ElectronBrowserHost";
+import { createCaptureActivity } from "~/components/preview/usePreviewBridge";
 
 const threadRef = scopeThreadRef(
   EnvironmentId.make("host-webview-order"),
@@ -94,7 +89,6 @@ function setup(): Disposable {
     preloadUrl: null,
   });
   mocks.updatePresentation.mockReset().mockResolvedValue(undefined);
-  mocks.captureListeners.clear();
   return {
     [Symbol.dispose]() {
       resetPreviewStateForTests();
@@ -136,37 +130,15 @@ describe("ElectronBrowserHost", () => {
     const tabId = wrapper.dataset.previewViewport!;
     const guest = wrapper.querySelector("webview");
     await vi.waitFor(() => expect(wrapper.style.left).toBe("-100000px"));
-    const acknowledgements: Array<{
-      left: string;
-      top: string;
-      rendering: string | undefined;
-      visible: boolean;
-    }> = [];
-    mocks.updatePresentation.mockImplementation(async (input) => {
-      if (input.captureIds.length === 0) return;
-      acknowledgements.push({
-        left: wrapper.style.left,
-        top: wrapper.style.top,
-        rendering: wrapper.dataset.previewRendering,
-        visible: input.visible,
-      });
-    });
-
-    const activity = { tabId, captureId: "capture-1", active: true };
-    for (const listener of mocks.captureListeners) listener(activity);
+    const capture = createCaptureActivity(tabId);
+    using _capture = { [Symbol.dispose]: capture.release };
+    await act(() => capture.update(true));
     await vi.waitFor(() => {
-      expect(mocks.updatePresentation).toHaveBeenCalledWith({
-        tabId,
-        visible: false,
-        captureIds: [activity.captureId],
-      });
-      expect(acknowledgements).toEqual([
-        { left: "0px", top: "0px", rendering: "active", visible: false },
-      ]);
+      expect(wrapper.style.left).toBe("0px");
+      expect(wrapper.dataset.previewRendering).toBe("active");
+      expect(mocks.updatePresentation).toHaveBeenLastCalledWith({ tabId, visible: false });
     });
-    await act(() => {
-      for (const listener of mocks.captureListeners) listener({ ...activity, active: false });
-    });
+    await act(() => capture.update(false));
     await vi.waitFor(() => {
       expect(wrapper.style.left).toBe("-100000px");
       expect(wrapper.querySelector("webview")).toBe(guest);

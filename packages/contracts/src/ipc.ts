@@ -321,6 +321,8 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
   installedPath: Schema.NullOr(Schema.String),
   onPath: Schema.Boolean,
   shadowedBy: Schema.optionalKey(Schema.String),
+  /** The app's bundled `t3` launcher, which runs without Node or a PATH entry. */
+  launcherPath: Schema.NullOr(Schema.String),
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
 
@@ -590,6 +592,8 @@ export interface DesktopPreviewTabState {
   /** Chromium reports playback even when audioMuted is true. */
   audible: boolean;
   controller: "human" | "agent" | "none";
+  /** A screenshot or stream of the guest is pending, so the client keeps it painting while hidden. */
+  capturing: boolean;
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
 }
@@ -947,16 +951,8 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewPresentationInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   visible: Schema.Boolean,
-  captureIds: Schema.Array(TrimmedNonEmptyString),
 });
 export type DesktopPreviewPresentationInput = typeof DesktopPreviewPresentationInputSchema.Type;
-
-export const DesktopPreviewCaptureActivity = Schema.Struct({
-  tabId: DesktopPreviewTabIdSchema,
-  captureId: TrimmedNonEmptyString,
-  active: Schema.Boolean,
-});
-export type DesktopPreviewCaptureActivity = typeof DesktopPreviewCaptureActivity.Type;
 
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
@@ -1144,7 +1140,6 @@ export interface DesktopPreviewBridge {
   closeTab: (tabId: string) => Promise<void>;
   registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
   updatePresentation?: (input: DesktopPreviewPresentationInput) => Promise<void>;
-  onCaptureActivity?: (listener: (event: DesktopPreviewCaptureActivity) => void) => () => void;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;

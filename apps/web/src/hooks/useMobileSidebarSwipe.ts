@@ -11,6 +11,7 @@ export function useMobileSidebarSwipe({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // oxlint-disable-next-line t3code/react-effect-budget -- Document touch listeners must follow the mounted sidebar and its current visibility.
   useEffect(() => {
     if (!enabled) return;
     return observeMobileSidebarSwipe(document, { open, onOpenChange });

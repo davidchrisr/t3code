@@ -320,15 +320,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   preview: {
     updatePresentation: (input) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_PRESENTATION_CHANNEL, input),
-    onCaptureActivity: (listener) => {
-      const wrappedListener = (_event: Electron.IpcRendererEvent, activity: unknown) => {
-        if (typeof activity !== "object" || activity === null) return;
-        listener(activity as Parameters<typeof listener>[0]);
-      };
-      ipcRenderer.on(IpcChannels.PREVIEW_CAPTURE_ACTIVITY_CHANNEL, wrappedListener);
-      return () =>
-        ipcRenderer.removeListener(IpcChannels.PREVIEW_CAPTURE_ACTIVITY_CHANNEL, wrappedListener);
-    },
     setForwardedShortcuts: (shortcuts) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL, shortcuts),
     createTab: (tabId, defaults) =>

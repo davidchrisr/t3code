@@ -29,7 +29,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
@@ -47,13 +46,6 @@ export const installPreviewEventForwarding = Effect.fn(
 )(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const manager = yield* PreviewManager.PreviewManager;
-  const browserHost = yield* DesktopBrowserHost.DesktopBrowserHost;
-  yield* browserHost.captureActivity.pipe(
-    Stream.runForEach((event) =>
-      electronWindow.sendAll(IpcChannels.PREVIEW_CAPTURE_ACTIVITY_CHANNEL, event),
-    ),
-    Effect.forkScoped,
-  );
   yield* manager.subscribeStateChanges((tabId, state) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, tabId, state),
   );
