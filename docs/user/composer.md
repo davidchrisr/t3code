@@ -21,7 +21,12 @@ task lists, quotes, headings and rules; ` ``` ` followed by Enter opens a code
 block. What you typed is what the agent receives, markers and numbering
 included, and `#1234` without a space still looks up a pull request.
 
-Enter sends. In a list or quote, **Shift+Enter** continues it, and Shift+Enter
+Enter sends by default on desktop. Mobile web defaults to Enter for a new line;
+tap Send, or use `Cmd+Enter` on an Apple hardware keyboard or `Ctrl+Enter` on
+Android, to send. Existing saved preferences are kept. Change this under
+**Settings → Chat → Send shortcut**.
+
+In a list or quote, **Shift+Enter** continues it, and Shift+Enter
 on an empty line leaves it; **Tab** nests a list item. In a code block, Enter
 starts a new line at the current indentation, **Tab** and **Shift+Tab** indent
 the selected lines, and a closing ` ``` ` followed by Enter, or two blank lines

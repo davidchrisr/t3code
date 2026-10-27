@@ -1,4 +1,6 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
+import { ComposerKeyboardBar, isComposerKeyboardFocusTarget } from "./ComposerKeyboardBar";
+import type { ComposerKeyboardAction } from "~/composer-keyboard";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -1064,6 +1066,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
   const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
+  const [isComposerEditorFocused, setIsComposerEditorFocused] = useState(false);
   const {
     isComposerFocused,
     setIsComposerFocused,
@@ -2046,7 +2049,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerHighlightedItemId(nextItem?.id ?? null);
   };
 
-  const blurMobileComposerAfterSend = () => {
+  const blurMobileComposer = () => {
     if (!isSoftwareKeyboardOpen) return;
     if (composerBlurFrameRef.current !== null) {
       window.cancelAnimationFrame(composerBlurFrameRef.current);
@@ -2057,7 +2060,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeElement.blur();
     }
     setIsComposerFocused(false);
+    setIsComposerEditorFocused(false);
   };
+  const blurMobileComposerStable = useStableCallback(blurMobileComposer);
+
+  const onComposerKeyboardAction = (action: ComposerKeyboardAction) => {
+    composerEditorRef.current?.runKeyboardAction(action);
+  };
+  const onComposerKeyboardActionStable = useStableCallback(onComposerKeyboardAction);
 
   const shouldBlurMobileComposerOnSubmit = () => {
     if (!isSoftwareKeyboardOpen) return false;
@@ -2135,7 +2145,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!submission.didDispatch) return;
     onTypingGuardSend();
     if (shouldBlurMobileComposerOnSubmit()) {
-      blurMobileComposerAfterSend();
+      blurMobileComposer();
     }
   };
   const submitComposerStable = useStableCallback(submitComposer);
@@ -3309,6 +3319,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusComposer={focusComposer}
     />
   ) : null;
+  const isComposerEditorDisabled =
+    isConnecting ||
+    projectSelectionRequired ||
+    isChoiceOnlyPendingQuestion ||
+    activePendingIsResponding;
   return (
     <form
       ref={composerFormRef}
@@ -3332,6 +3347,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }}
       onFocusCapture={(event) => {
         const activeElement = event.target;
+        setIsComposerEditorFocused(isComposerKeyboardFocusTarget(activeElement));
         if (
           activeElement instanceof Element &&
           activeElement.closest('[data-testid="composer-editor"]')
@@ -3354,6 +3370,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         setIsComposerFocused(true);
       }}
       onBlurCapture={(event) => {
+        setIsComposerEditorFocused(isComposerKeyboardFocusTarget(event.relatedTarget));
         if (
           event.target instanceof Element &&
           event.target.closest('[data-testid="composer-editor"]')
@@ -3690,12 +3707,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 ? "Enable a provider in Settings to send a message"
                                 : DEFAULT_COMPOSER_PLACEHOLDER
                     }
-                    disabled={
-                      isConnecting ||
-                      projectSelectionRequired ||
-                      isChoiceOnlyPendingQuestion ||
-                      activePendingIsResponding
-                    }
+                    disabled={isComposerEditorDisabled}
                   />
                 </ComposerContextActionsContext>
                 {isComposerResting ? collapsedComposerImagePreviews : null}
@@ -3859,6 +3871,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               </div>
             ) : null}
           </div>
+          {isSoftwareKeyboardOpen && isComposerEditorFocused && (
+            <ComposerKeyboardBar
+              disabled={isComposerEditorDisabled}
+              onAction={onComposerKeyboardActionStable}
+              onHideKeyboard={blurMobileComposerStable}
+            />
+          )}
         </ComposerSurface.Main>
       </div>
     </form>

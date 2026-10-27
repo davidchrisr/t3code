@@ -55,7 +55,7 @@ function browserFamily(userAgent: string): string {
   return "other";
 }
 
-function browserDeviceType(identity: BrowserIdentity): AuthClientMetadataDeviceType {
+export function browserDeviceType(identity: BrowserIdentity): AuthClientMetadataDeviceType {
   const userAgent = identity.userAgent;
   if (userAgent.trim() === "") return "unknown";
   if (
