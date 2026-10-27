@@ -38,6 +38,7 @@ import {
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
+import { getDefaultClientSettings } from "../../clientSettingsDefaults";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import {
   readAppearanceModePreference,
@@ -376,6 +377,7 @@ function AboutVersionSection() {
 }
 
 export function useSettingsRestore(onRestored?: () => void) {
+  const defaultSendShortcut = getDefaultClientSettings().sendShortcut;
   const {
     theme,
     setTheme,
@@ -478,7 +480,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? ["Rich text composer"]
       : []),
-    ...(settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? ["Send shortcut"] : []),
+    ...(settings.sendShortcut !== defaultSendShortcut ? ["Send shortcut"] : []),
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? ["Follow-up behavior"]
       : []),
@@ -594,7 +596,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
-      sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
+      sendShortcut: defaultSendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
@@ -778,6 +780,7 @@ function LegacyFeaturesSection() {
 }
 
 export function GeneralSettingsPanel() {
+  const defaultSendShortcut = getDefaultClientSettings().sendShortcut;
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const sendShortcutOptions = [
     { value: "enter", label: "Enter" },
@@ -1434,12 +1437,10 @@ export function GeneralSettingsPanel() {
           {...searchableSetting("send-shortcut")}
           description="Choose when Enter sends a prompt or inserts a new line"
           resetAction={
-            settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? (
+            settings.sendShortcut !== defaultSendShortcut ? (
               <SettingResetButton
                 label="send shortcut"
-                onClick={() =>
-                  updateSettings({ sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut })
-                }
+                onClick={() => updateSettings({ sendShortcut: defaultSendShortcut })}
               />
             ) : null
           }

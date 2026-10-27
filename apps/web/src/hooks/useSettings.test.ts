@@ -30,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -41,6 +42,45 @@ describe("client settings hydration", () => {
   };
   const onboardingCompletedAt = "2026-09-05T12:00:00.000Z";
   const complete = (current: ClientSettings) => ({ ...current, onboardingCompletedAt });
+
+  it("defaults a new mobile web client to modifier Enter before and after hydration", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    __resetClientSettingsPersistenceForTests();
+
+    expect(getClientSettings().sendShortcut).toBe("mod-enter");
+    await ensureClientSettingsHydrated();
+    expect(getClientSettings().sendShortcut).toBe("mod-enter");
+    expect(persistenceMocks.setClientSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(["enter", "mod-enter-multiline", "mod-enter"] as const)(
+    "preserves a mobile web client's saved %s send preference across other edits",
+    async (sendShortcut) => {
+      vi.stubGlobal("window", {});
+      vi.stubGlobal("navigator", {
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+        platform: "iPhone",
+        maxTouchPoints: 5,
+      });
+      __resetClientSettingsPersistenceForTests();
+      persistenceMocks.getClientSettings.mockResolvedValue({ ...savedSettings, sendShortcut });
+
+      await ensureClientSettingsHydrated();
+      await persistClientSettingsPatch({ wordWrap: false });
+
+      expect(getClientSettings().sendShortcut).toBe(sendShortcut);
+      expect(persistenceMocks.setClientSettings).toHaveBeenCalledExactlyOnceWith({
+        ...savedSettings,
+        sendShortcut,
+        wordWrap: false,
+      });
+    },
+  );
 
   it("waits for saved model preferences before applying the first server edit", async () => {
     const provider = ProviderInstanceId.make("codex_work");

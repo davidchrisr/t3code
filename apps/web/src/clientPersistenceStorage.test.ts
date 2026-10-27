@@ -38,6 +38,42 @@ afterEach(() => {
 });
 
 describe("clientPersistenceStorage", () => {
+  it("uses the mobile default when saved settings have no send preference", async () => {
+    const testWindow = getTestWindow();
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    });
+    testWindow.localStorage.setItem("t3code:client-settings:v1", '{"timestampFormat":"12-hour"}');
+    const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+    expect(readBrowserClientSettings()).toEqual({
+      ...DEFAULT_CLIENT_SETTINGS,
+      timestampFormat: "12-hour",
+      sendShortcut: "mod-enter",
+    });
+  });
+
+  it.each(["enter", "mod-enter-multiline", "mod-enter"] as const)(
+    "preserves a mobile browser's saved %s preference",
+    async (sendShortcut) => {
+      const testWindow = getTestWindow();
+      vi.stubGlobal("navigator", {
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+        platform: "iPhone",
+        maxTouchPoints: 5,
+      });
+      testWindow.localStorage.setItem(
+        "t3code:client-settings:v1",
+        JSON.stringify({ sendShortcut }),
+      );
+      const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+      expect(readBrowserClientSettings()?.sendShortcut).toBe(sendShortcut);
+    },
+  );
+
   it.each(["not-json", '{"wordWrap":"invalid"}'])(
     "does not treat invalid saved settings as absent: %s",
     async (value) => {

@@ -15,7 +15,6 @@ import {
 import {
   type ClientSettingsPatch,
   type ClientSettings,
-  DEFAULT_CLIENT_SETTINGS,
   type EnvironmentIdentificationMode,
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
@@ -30,6 +29,7 @@ import {
   supportsSharedSettingsSync,
 } from "@t3tools/client-runtime/state/shared-settings";
 import { ensureLocalApi } from "~/localApi";
+import { getDefaultClientSettings } from "~/clientSettingsDefaults";
 import {
   getThemeDefinition,
   getThemePreviewSidebarArtwork,
@@ -68,7 +68,7 @@ type UnifiedSettingsPatch = ServerSettingsPatch & ClientSettingsPatch;
 const clientSettingsListeners = new Set<() => void>();
 const clientSettingsHydrationListeners = new Set<() => void>();
 type ClientSettingsHydrationStatus = "pending" | "ready" | "failed" | "retrying";
-let clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
+let clientSettingsSnapshot = getDefaultClientSettings();
 let clientSettingsHydrationStatus: ClientSettingsHydrationStatus = "pending";
 let clientSettingsHydrationPromise: Promise<void> | null = null;
 let clientSettingsHydrationGeneration = 0;
@@ -149,7 +149,7 @@ async function hydrateClientSettings(): Promise<void> {
         return;
       }
       if (persistedSettings) {
-        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
+        replaceClientSettingsSnapshot({ ...getDefaultClientSettings(), ...persistedSettings });
       }
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
@@ -285,7 +285,6 @@ export function useClientSettingsHydrationStatus(): ClientSettingsHydrationStatu
   );
 }
 
-const getDefaultClientSettings = () => DEFAULT_CLIENT_SETTINGS;
 const selectWholeClientSettings = (settings: ClientSettings) => settings;
 
 /** Structurally equal selections retain their reference and skip rendering. */
@@ -722,7 +721,7 @@ export function updateClientSettings(patch: ClientSettingsPatch): Promise<void> 
 
 export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsHydrationGeneration += 1;
-  clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
+  clientSettingsSnapshot = getDefaultClientSettings();
   clientSettingsHydrationStatus = "pending";
   clientSettingsHydrationPromise = null;
   clientSettingsPersistenceQueue = Promise.resolve();
