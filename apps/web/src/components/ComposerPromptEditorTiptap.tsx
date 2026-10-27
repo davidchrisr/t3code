@@ -56,6 +56,7 @@ import {
   pastedPathQueryLength,
 } from "~/composer-logic";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { runComposerKeyboardAction, type ComposerKeyboardAction } from "~/composer-keyboard";
 import { caretLineDirection, ComposerTextDirectionExtension } from "~/composer-text-direction";
 import {
   collectComposerPromptInlineTokens,
@@ -130,6 +131,7 @@ export interface ComposerPromptEditorHandle {
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
   readSelectionRange: () => { start: number; end: number };
+  runKeyboardAction: (action: ComposerKeyboardAction) => void;
   requestCitationComment: (request: ComposerCitationCommentRequest) => void;
   readSnapshot: () => {
     value: string;
@@ -1696,6 +1698,9 @@ function ComposerPromptEditorTiptapInner(
       readSelectionRange: () => {
         readSnapshot();
         return selectionRangeRef.current;
+      },
+      runKeyboardAction: (action) => {
+        if (editor) runComposerKeyboardAction(editor.view, action);
       },
       requestCitationComment: (request) => {
         citationRequestRef.current = request;
