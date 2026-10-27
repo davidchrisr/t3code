@@ -61,12 +61,9 @@ import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { isTerminalUrl } from "../terminal-links";
 import {
-  isDiffToggleShortcut,
   isTerminalClearShortcut,
-  isTerminalNewShortcut,
-  isTerminalSplitShortcut,
-  isTerminalSplitVerticalShortcut,
-  isTerminalToggleShortcut,
+  resolveShortcutCommand,
+  threadJumpIndexFromCommand,
   terminalDeleteShortcutData,
   terminalNavigationShortcutData,
 } from "../keybindings";
@@ -87,7 +84,10 @@ import { terminalEnvironment } from "../state/terminal";
 import { useEnvironmentScope } from "../state/session";
 import { openTerminalLinkInPreview } from "./preview/openTerminalLinkInPreview";
 import { useAtomCommand } from "../state/use-atom-command";
-import { preventTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
+import type { TerminalCloseShortcutEvent } from "../lib/terminalCloseShortcut";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import { isModelPickerOpen } from "../modelPickerVisibility";
+import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { observeResize } from "../lib/observeResize";
 import {
   resolveTerminalFontPreference,
@@ -408,6 +408,48 @@ export function shouldHandleTerminalExit(
   );
 }
 
+export function shouldBypassTerminalInput(
+  event: TerminalCloseShortcutEvent,
+  keybindings: ResolvedKeybindingsConfig,
+  threadRef: ScopedThreadRef,
+  platform = navigator.platform,
+): boolean {
+  const { terminalOpen } = selectThreadTerminalUiState(
+    useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+    threadRef,
+  );
+  const modelPickerOpen = isModelPickerOpen();
+  const command = resolveShortcutCommand(event, keybindings, {
+    platform,
+    context: { terminalFocus: true, terminalOpen, modelPickerOpen },
+  });
+  if (threadJumpIndexFromCommand(command ?? "") !== null) {
+    return !modelPickerOpen && !isCommandPaletteOpen();
+  }
+
+  // Terminal controls treat their own surface as open even when it is in the right panel.
+  const terminalCommand =
+    terminalOpen && !modelPickerOpen
+      ? command
+      : resolveShortcutCommand(event, keybindings, {
+          platform,
+          context: { terminalFocus: true, terminalOpen: true },
+        });
+  switch (terminalCommand) {
+    case "terminal.close":
+      event.preventDefault();
+      return true;
+    case "terminal.toggle":
+    case "terminal.split":
+    case "terminal.splitVertical":
+    case "terminal.new":
+    case "diff.toggle":
+      return true;
+    default:
+      return false;
+  }
+}
+
 interface TerminalViewportProps {
   advancedTypography: boolean;
   threadRef: ScopedThreadRef;
@@ -496,7 +538,9 @@ function TerminalSessionViewport({
   const hasHandledExitRef = useRef(false);
   const selectionActionRequestIdRef = useRef(0);
   const openSelectionMenuRequestIdRef = useRef<number | null>(null);
-  const readKeybindings = useEffectEvent(() => keybindings);
+  const bypassTerminalInput = useEffectEvent((event: KeyboardEvent) =>
+    shouldBypassTerminalInput(event, keybindings, threadRef),
+  );
   const handleSessionExited = useEffectEvent(() => {
     if (hasTerminalWriteAccess()) onSessionExited();
   });
@@ -882,20 +926,7 @@ function TerminalSessionViewport({
       };
 
       function handleBeforeKey(event: KeyboardEvent): boolean {
-        const currentKeybindings = readKeybindings();
-        const options = { context: { terminalFocus: true, terminalOpen: true } };
-        if (preventTerminalCloseShortcut(event, currentKeybindings)) {
-          return false;
-        }
-        if (
-          isTerminalToggleShortcut(event, currentKeybindings, options) ||
-          isTerminalSplitShortcut(event, currentKeybindings, options) ||
-          isTerminalSplitVerticalShortcut(event, currentKeybindings, options) ||
-          isTerminalNewShortcut(event, currentKeybindings, options) ||
-          isDiffToggleShortcut(event, currentKeybindings, options)
-        ) {
-          return false;
-        }
+        if (bypassTerminalInput(event)) return false;
 
         const navigationData = terminalNavigationShortcutData(event);
         if (navigationData !== null) {

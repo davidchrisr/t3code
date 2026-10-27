@@ -264,6 +264,21 @@ export function threadJumpIndexFromCommand(command: string): number | null {
   return index === -1 ? null : index;
 }
 
+export function threadJumpLabelsForThreadKeys(
+  threadKeys: readonly string[],
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+) {
+  const labels = new Map<string, string>();
+  for (const [index, threadKey] of threadKeys.entries()) {
+    const command = threadJumpCommandForIndex(index);
+    if (command === null) break;
+    const label = shortcutLabelForCommand(keybindings, command, options);
+    if (label !== null) labels.set(threadKey, label);
+  }
+  return labels;
+}
+
 export function threadTraversalDirectionFromCommand(
   command: string | null,
 ): "previous" | "next" | null {
@@ -277,11 +292,6 @@ export function shouldShowThreadJumpHintsForModifiers(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
-  // Ghostty can write keys to the shell before window shortcuts run, regardless of the when clause.
-  if (resolveContext(options).terminalFocus) {
-    return false;
-  }
-
   const platform = resolvePlatform(options);
 
   for (const command of THREAD_JUMP_KEYBINDING_COMMANDS) {

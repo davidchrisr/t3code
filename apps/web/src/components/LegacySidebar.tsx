@@ -49,7 +49,6 @@ import {
   type EnvironmentId,
   ProjectId,
   type ScopedThreadRef,
-  type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
   resolveEnvironmentMachineKind,
   ThreadId,
@@ -115,6 +114,7 @@ import {
   shortcutLabelForCommand,
   shouldShowThreadJumpHintsForModifiers,
   threadJumpCommandForIndex,
+  threadJumpLabelsForThreadKeys,
   threadJumpIndexFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
@@ -295,36 +295,6 @@ function projectGroupingModeDescription(mode: SidebarProjectGroupingMode): strin
     case "separate":
       return "Every project path gets its own sidebar row.";
   }
-}
-
-function buildThreadJumpLabelMap(input: {
-  keybindings: ResolvedKeybindingsConfig;
-  platform: string;
-  terminalOpen: boolean;
-  threadJumpCommandByKey: ReadonlyMap<
-    string,
-    NonNullable<ReturnType<typeof threadJumpCommandForIndex>>
-  >;
-}): ReadonlyMap<string, string> {
-  if (input.threadJumpCommandByKey.size === 0) {
-    return EMPTY_THREAD_JUMP_LABELS;
-  }
-
-  const shortcutLabelOptions = {
-    platform: input.platform,
-    context: {
-      terminalFocus: false,
-      terminalOpen: input.terminalOpen,
-    },
-  } as const;
-  const mapping = new Map<string, string>();
-  for (const [threadKey, command] of input.threadJumpCommandByKey) {
-    const label = shortcutLabelForCommand(input.keybindings, command, shortcutLabelOptions);
-    if (label) {
-      mapping.set(threadKey, label);
-    }
-  }
-  return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
 
 interface SidebarThreadRowProps {
@@ -3241,7 +3211,6 @@ function useLegacySidebarThreads(input: {
     sidebarThreadByKey,
     activeRouteProjectKey,
     visibleSidebarThreadKeys,
-    threadJumpCommandByKey,
     threadJumpThreadKeys: [...threadJumpCommandByKey.keys()],
     prewarmedSidebarThreadRefs,
   };
@@ -3299,7 +3268,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     sidebarThreadByKey,
     activeRouteProjectKey,
     visibleSidebarThreadKeys,
-    threadJumpCommandByKey,
     threadJumpThreadKeys,
     prewarmedSidebarThreadRefs,
   } = useLegacySidebarThreads({
@@ -3406,18 +3374,15 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   };
 
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
-  // Build before modifier-dependent context to give the compiler a separate cache used by every row.
-  const threadJumpLabelByKey = buildThreadJumpLabelMap({
-    keybindings,
-    platform,
-    terminalOpen: routeTerminalOpen,
-    threadJumpCommandByKey,
-  });
   const sidebarShortcutContext = {
     terminalFocus: terminalFocused,
     terminalOpen: routeTerminalOpen,
     modelPickerOpen: isModelPickerOpen(),
   };
+  const threadJumpLabelByKey = threadJumpLabelsForThreadKeys(threadJumpThreadKeys, keybindings, {
+    platform,
+    context: sidebarShortcutContext,
+  });
   const shouldShowThreadJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
     shortcutModifiers,
     keybindings,
