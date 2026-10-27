@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@t3tools/shared/keybindings";
 import {
   applyTerminalAttachStreamEvent,
   combineTerminalSessionState,
@@ -10,9 +16,135 @@ import {
 import {
   shouldClearTerminalSelectionAction,
   shouldHandleTerminalExit,
+  shouldBypassTerminalInput,
   synchronizeTerminalOutput,
   synchronizeTerminalSession,
 } from "./ThreadTerminalDrawer";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+
+vi.mock("../env", () => ({ isElectron: true }));
+
+const threadRef = scopeThreadRef(
+  EnvironmentId.make("shortcut-environment"),
+  ThreadId.make("thread"),
+);
+
+function mockTerminalDrawerOpen(terminalOpen: boolean) {
+  const state = useTerminalUiStateStore.getState();
+  return vi.spyOn(useTerminalUiStateStore, "getState").mockReturnValue({
+    ...state,
+    terminalUiStateByThreadKey: {
+      [scopedThreadKey(threadRef)]: {
+        ...selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
+        terminalOpen,
+      },
+    },
+  });
+}
+
+function shortcutEvent() {
+  return {
+    key: "g",
+    ctrlKey: true,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    preventDefault: vi.fn(),
+  };
+}
+
+describe("terminal thread shortcuts", () => {
+  it.each([false, true])("yields all desktop thread jumps with drawer open=%s", (terminalOpen) => {
+    using _drawer = mockTerminalDrawerOpen(terminalOpen);
+    for (const platform of ["MacIntel", "Linux"]) {
+      for (let index = 1; index <= 9; index += 1) {
+        const event = {
+          ...shortcutEvent(),
+          key: String(index),
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform === "Linux",
+        };
+        expect(
+          shouldBypassTerminalInput(event, DEFAULT_RESOLVED_KEYBINDINGS, threadRef, platform),
+        ).toBe(true);
+        expect(event.preventDefault).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("keeps an inactive drawer-conditioned shortcut available to a panel terminal", () => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const keybindings = compileResolvedKeybindingsConfig([
+      { key: "ctrl+g", command: "thread.jump.1", when: "terminalOpen" },
+    ]);
+    expect(shouldBypassTerminalInput(shortcutEvent(), keybindings, threadRef, "Linux")).toBe(false);
+  });
+
+  it("yields to a panel thread jump conditioned on the drawer being closed", () => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const keybindings = compileResolvedKeybindingsConfig([
+      { key: "ctrl+g", command: "thread.jump.1", when: "!terminalOpen" },
+    ]);
+    const event = shortcutEvent();
+    expect(shouldBypassTerminalInput(event, keybindings, threadRef, "Linux")).toBe(true);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("follows the drawer's current state when it opens", () => {
+    using _drawer = mockTerminalDrawerOpen(true);
+    for (const [when, expected] of [
+      ["terminalOpen", true],
+      ["!terminalOpen", false],
+    ] as const) {
+      const keybindings = compileResolvedKeybindingsConfig([
+        { key: "ctrl+g", command: "thread.jump.1", when },
+      ]);
+      expect(shouldBypassTerminalInput(shortcutEvent(), keybindings, threadRef, "Linux")).toBe(
+        expected,
+      );
+    }
+  });
+
+  it("respects thread jump focus conditions and later command precedence", () => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const restricted = compileResolvedKeybindingsConfig([
+      { key: "ctrl+g", command: "thread.jump.1", when: "!terminalFocus" },
+    ]);
+    expect(shouldBypassTerminalInput(shortcutEvent(), restricted, threadRef, "Linux")).toBe(false);
+
+    const shadowed = compileResolvedKeybindingsConfig([
+      { key: "ctrl+g", command: "thread.jump.1" },
+      { key: "ctrl+g", command: "sidebar.toggle" },
+    ]);
+    expect(shouldBypassTerminalInput(shortcutEvent(), shadowed, threadRef, "Linux")).toBe(false);
+  });
+
+  it("leaves ordinary terminal typing alone", () => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const event = { ...shortcutEvent(), key: "1", ctrlKey: false };
+    expect(shouldBypassTerminalInput(event, DEFAULT_RESOLVED_KEYBINDINGS, threadRef, "Linux")).toBe(
+      false,
+    );
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("keeps terminal controls available in a panel with the drawer closed", () => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const keybindings = compileResolvedKeybindingsConfig([
+      { key: "ctrl+g", command: "terminal.split", when: "terminalOpen" },
+    ]);
+    expect(shouldBypassTerminalInput(shortcutEvent(), keybindings, threadRef, "Linux")).toBe(true);
+  });
+
+  it.each([false, true])("prevents browser close for a terminal close with repeat=%s", (repeat) => {
+    using _drawer = mockTerminalDrawerOpen(false);
+    const event = { ...shortcutEvent(), key: "w", repeat };
+    expect(shouldBypassTerminalInput(event, DEFAULT_RESOLVED_KEYBINDINGS, threadRef, "Linux")).toBe(
+      true,
+    );
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+});
 
 describe("terminal selection actions", () => {
   it("does not let an old selection popup cancel its replacement right-click menu", () => {

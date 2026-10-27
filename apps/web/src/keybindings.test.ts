@@ -21,6 +21,7 @@ import {
   resolveShortcutCommand,
   shouldShowThreadJumpHintsForModifiers,
   shortcutLabelForCommand,
+  threadJumpLabelsForThreadKeys,
   type ShortcutEventLike,
 } from "./keybindings";
 
@@ -320,8 +321,8 @@ describe("shortcutLabelForCommand", () => {
 });
 
 describe("thread navigation helpers", () => {
-  it("never shows jump hints while the terminal is focused, even with an unrestricted binding", () => {
-    assert.isFalse(
+  it("shows jump hints while the terminal is focused when the binding allows it", () => {
+    assert.isTrue(
       shouldShowThreadJumpHintsForModifiers(event({ metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
@@ -332,6 +333,95 @@ describe("thread navigation helpers", () => {
         platform: "MacIntel",
         context: { terminalFocus: false },
       }),
+    );
+  });
+
+  it("bypasses terminal input for every default desktop thread jump", () => {
+    for (let index = 1; index <= 9; index += 1) {
+      assert.strictEqual(
+        resolveShortcutCommand(
+          event({ key: String(index), metaKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          {
+            platform: "MacIntel",
+            context: { terminalFocus: true, isDesktop: true },
+          },
+        ),
+        `thread.jump.${index}`,
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(
+          event({ key: String(index), ctrlKey: true }),
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          {
+            platform: "Linux",
+            context: { terminalFocus: true, isDesktop: true },
+          },
+        ),
+        `thread.jump.${index}`,
+      );
+    }
+  });
+
+  it("labels only jumps active in the current terminal focus and drawer state", () => {
+    const bindings = compile([
+      {
+        shortcut: modShortcut("1"),
+        command: "thread.jump.1",
+        whenAst: whenIdentifier("terminalFocus"),
+      },
+      {
+        shortcut: modShortcut("2"),
+        command: "thread.jump.2",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+      {
+        shortcut: modShortcut("3"),
+        command: "thread.jump.3",
+        whenAst: whenIdentifier("terminalOpen"),
+      },
+    ]);
+    const threadKeys = ["first", "second", "third"];
+    assert.deepEqual(
+      [
+        ...threadJumpLabelsForThreadKeys(threadKeys, bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: true, terminalOpen: false },
+        }),
+      ],
+      [["first", "⌘1"]],
+    );
+    assert.deepEqual(
+      [
+        ...threadJumpLabelsForThreadKeys(threadKeys, bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: false, terminalOpen: true },
+        }),
+      ],
+      [
+        ["second", "⌘2"],
+        ["third", "⌘3"],
+      ],
+    );
+  });
+
+  it("omits jump labels shadowed by another command in the current context", () => {
+    const bindings = compile([
+      { shortcut: modShortcut("1"), command: "thread.jump.1" },
+      {
+        shortcut: modShortcut("1"),
+        command: "terminal.new",
+        whenAst: whenIdentifier("terminalFocus"),
+      },
+    ]);
+    assert.deepEqual(
+      [
+        ...threadJumpLabelsForThreadKeys(["first"], bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        }),
+      ],
+      [],
     );
   });
 
