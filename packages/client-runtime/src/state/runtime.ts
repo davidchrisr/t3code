@@ -27,9 +27,11 @@ import {
   type EnvironmentRpcStreamValue,
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
+  type EnvironmentStreamCommandRpcTag,
   EnvironmentRpcUnavailableError,
   request,
   requestGuarded,
+  runStreamGuarded,
   RpcPermissionGuard,
   subscribe,
 } from "../rpc/client.ts";
@@ -835,6 +837,55 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
         : options.transform(stream);
     },
   });
+}
+
+export function createEnvironmentRpcStreamCommand<
+  R,
+  ER,
+  TTag extends EnvironmentStreamCommandRpcTag,
+>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
+  options: { readonly label: string; readonly tag: TTag },
+) {
+  const permissions = createCommandPermissions(runtime, options.tag);
+  const command = createEnvironmentCommand(runtime, {
+    label: options.label,
+    execute: (
+      input: {
+        readonly payload: EnvironmentRpcInput<TTag>;
+        readonly signal: AbortSignal;
+        readonly onEvent: (event: EnvironmentRpcStreamValue<TTag>) => void;
+      },
+      registry,
+      environmentId,
+    ) =>
+      permissions.authorize(registry, environmentId, input.payload).pipe(
+        Effect.andThen(() =>
+          input.signal.aborted
+            ? Effect.void
+            : runStreamGuarded(options.tag, input.payload).pipe(
+                Stream.runForEach((event) => Effect.sync(() => input.onEvent(event))),
+                Effect.raceFirst(
+                  Effect.callback<void>((resume) => {
+                    const abort = () => resume(Effect.void);
+                    input.signal.addEventListener("abort", abort, { once: true });
+                    if (input.signal.aborted) abort();
+                    return Effect.sync(() => input.signal.removeEventListener("abort", abort));
+                  }),
+                ),
+              ),
+        ),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
+      ),
+  });
+  return {
+    ...command,
+    requiredScopes: permissions.requiredScopes,
+    permissionAtom: permissions.permissionAtom,
+  };
 }
 
 export function createEnvironmentRpcCommand<

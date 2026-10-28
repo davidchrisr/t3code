@@ -699,20 +699,21 @@ export const layer: Layer.Layer<
                 allocateEventId,
               })
             : [];
-        const persistedStatus =
-          input.terminal.status === "completed" ? "waiting" : input.terminal.status;
+        const waitsForCheckpoint =
+          input.run.adoptedNativeTurnId === undefined && input.terminal.status === "completed";
+        const persistedStatus = waitsForCheckpoint ? "waiting" : input.terminal.status;
         // Omit delegatedCompletion; the startup snapshot must not overwrite newer acknowledgements, successors, or Stop barriers.
         const { delegatedCompletion: _delegatedCompletion, ...runWithoutDelegatedCompletion } =
           input.run;
         const finalizedRun: OrchestrationV2Run = {
           ...runWithoutDelegatedCompletion,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: waitsForCheckpoint ? null : completedAt,
         };
         const finalizedRootNode: OrchestrationV2ExecutionNode = {
           ...input.rootNode,
           status: persistedStatus,
-          completedAt: input.terminal.status === "completed" ? null : completedAt,
+          completedAt: waitsForCheckpoint ? null : completedAt,
           checkpointScopeId: input.checkpointScope.id,
         };
         const finalizedProviderThread: OrchestrationV2ProviderThread = {
@@ -729,9 +730,10 @@ export const layer: Layer.Layer<
         // Stopped runs capture rollback points for the next message; enqueue before later starts on this effect lane.
         const finalization = {
           effects:
-            input.terminal.status === "completed" ||
-            input.terminal.status === "interrupted" ||
-            input.terminal.status === "cancelled"
+            input.run.adoptedNativeTurnId === undefined &&
+            (input.terminal.status === "completed" ||
+              input.terminal.status === "interrupted" ||
+              input.terminal.status === "cancelled")
               ? [
                   {
                     id: `effect:checkpoint.capture:${input.run.id}`,
@@ -920,21 +922,22 @@ export const layer: Layer.Layer<
                   .responseStreamingMode,
             ),
           );
-          yield* checkpointService
-            .captureBaseline({
-              scope: input.checkpointScope,
-              ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-            })
-            .pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logWarning(
-                      "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                      { runId: input.run.id },
-                    ),
-              ),
-            );
+          if (input.run.adoptedNativeTurnId === undefined)
+            yield* checkpointService
+              .captureBaseline({
+                scope: input.checkpointScope,
+                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
+              })
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.logWarning(
+                        "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
+                        { runId: input.run.id },
+                      ),
+                ),
+              );
           if (
             input.shouldStartProviderTurn !== undefined &&
             !(yield* input.shouldStartProviderTurn())
@@ -1592,6 +1595,9 @@ export const layer: Layer.Layer<
           text: entry.text,
         }));
         const turnInput = {
+          ...(input.run.adoptedNativeTurnId === undefined
+            ? {}
+            : { adoptedNativeTurnId: input.run.adoptedNativeTurnId }),
           appThread: input.appThread,
           threadId: input.run.threadId,
           runId: input.run.id,
@@ -1625,6 +1631,7 @@ export const layer: Layer.Layer<
         }
 
         const compact =
+          input.run.adoptedNativeTurnId === undefined &&
           input.message.attachments.length === 0 &&
           input.message.text.trim().toLowerCase() === "/compact";
         const startTurn = compact

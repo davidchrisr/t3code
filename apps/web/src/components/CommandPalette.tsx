@@ -59,6 +59,7 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
+  MicIcon,
   PaletteIcon,
   RotateCcwIcon,
   SettingsIcon,
@@ -80,6 +81,7 @@ import {
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import { useAtomValue } from "@effect/atom-react";
+import { voiceMode, useVoiceState } from "../voice/voiceMode";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
@@ -546,6 +548,10 @@ function OpenCommandPaletteDialog(props: {
   );
   const canShareActiveThreadWithGuest = useAtomValue(
     canShareWithGuestAtom(activeThread?.environmentId ?? ("" as EnvironmentId)),
+  );
+  const voiceState = useVoiceState();
+  const canStartVoice = useAtomValue(
+    threadEnvironment.voiceSession.permissionAtom(activeThread?.environmentId ?? null),
   );
   const activeThreadReferenceCopyTarget =
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
@@ -1376,6 +1382,51 @@ function OpenCommandPaletteDialog(props: {
       icon: <UserPlusIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         openGuestShareDialog(threadRef);
+      },
+    });
+  }
+
+  if (voiceState.phase !== "idle") {
+    actionItems.push({
+      kind: "action",
+      value: "action:voice-stop",
+      title: "Stop voice conversation",
+      searchTerms: ["voice", "stop", "microphone"],
+      icon: <MicIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "voice.toggle",
+      run: async () => voiceMode.stop(),
+    });
+    actionItems.push({
+      kind: "action",
+      value: "action:voice-mute",
+      title: voiceState.muted ? "Unmute microphone" : "Mute microphone",
+      searchTerms: ["voice", "mute", "microphone"],
+      icon: <MicIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "voice.toggleMute",
+      run: async () => voiceMode.toggleMute(),
+    });
+  } else if (
+    activeThread !== null &&
+    providersByEnvironment
+      .get(activeThread.environmentId)
+      ?.some(
+        (provider) =>
+          provider.instanceId === activeThread.modelSelection.instanceId &&
+          provider.driver === "codex",
+      )
+  ) {
+    const thread = activeThread;
+    actionItems.push({
+      kind: "action",
+      value: "action:voice-start",
+      title: "Start voice conversation",
+      searchTerms: ["voice", "talk", "speak", "microphone"],
+      icon: <MicIcon className={ITEM_ICON_CLASS} />,
+      disabled:
+        !canStartVoice || thread.runtime === null || typeof RTCPeerConnection === "undefined",
+      shortcutCommand: "voice.toggle",
+      run: async () => {
+        await voiceMode.start({ environmentId: thread.environmentId, threadId: thread.id });
       },
     });
   }
@@ -2388,7 +2439,7 @@ function OpenCommandPaletteDialog(props: {
         command === "chat.newLocal" ||
         command === "chat.newWithoutProject");
     const matchingItem =
-      isJump || isNewThread
+      isJump || isNewThread || command === "voice.toggle" || command === "voice.toggleMute"
         ? displayedGroups
             .flatMap((group) => group.items)
             .find((item) => item.shortcutCommand === command)

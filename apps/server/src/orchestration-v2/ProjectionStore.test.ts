@@ -56,6 +56,49 @@ const modelSelection = {
 } satisfies ModelSelection;
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
+
+it.effect.each(["sql", "memory"] as const)(
+  "admits native adoption past unrelated holds in %s projections",
+  (kind) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("voice-held-queue");
+      const now = yield* DateTime.now;
+      const original = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      const update = (run: typeof original, name: string) =>
+        store.apply({
+          id: EventId.make(`voice-queue:${name}`),
+          type: "run.updated",
+          threadId,
+          occurredAt: now,
+          payload: run,
+        });
+      yield* update({ ...original, status: "queued", queueHeld: true }, "hold");
+      assert.isFalse(yield* store.canStartQueuedRun(threadId));
+      const native = {
+        ...original,
+        id: RunId.make("voice-queue-native"),
+        ordinal: 2,
+        status: "queued" as const,
+        queuePosition: 1,
+        queueHeld: false,
+        adoptedNativeTurnId: "native-turn",
+      };
+      yield* store.apply({
+        id: EventId.make("voice-queue:create"),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: native,
+      });
+      assert.isTrue(yield* store.canStartQueuedRun(threadId));
+      yield* update({ ...original, status: "running" }, "running");
+      assert.isFalse(yield* store.canStartQueuedRun(threadId));
+      yield* update({ ...original, status: "queued", queueHeld: true }, "reheld");
+      yield* update({ ...native, queueHeld: true }, "native-held");
+      assert.isTrue(yield* store.canStartQueuedRun(threadId));
+    }).pipe(Effect.provide(kind === "sql" ? layerTest : ProjectionStore.layerMemory)),
+);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const traceSqlStatements = () => {

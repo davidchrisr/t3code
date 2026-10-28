@@ -213,6 +213,7 @@ export function shouldPersistProviderEvent(stream: EventNdjsonStream, event: unk
     if (
       typeof method === "string" &&
       (transientNativeMethods.has(method) ||
+        method.startsWith("thread/realtime/") ||
         method.startsWith("claude/stream_event/content_block_delta/"))
     ) {
       return false;

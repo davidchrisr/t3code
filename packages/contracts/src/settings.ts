@@ -577,6 +577,19 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
+const CODEX_VOICE_OPTIONS = [
+  { value: "", label: "Codex default" },
+  { value: "cove", label: "Cove" },
+  { value: "juniper", label: "Juniper" },
+  { value: "maple", label: "Maple" },
+  { value: "spruce", label: "Spruce" },
+  { value: "ember", label: "Ember" },
+  { value: "vale", label: "Vale" },
+  { value: "breeze", label: "Breeze" },
+  { value: "arbor", label: "Arbor" },
+  { value: "sol", label: "Sol" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+
 export const CodexSettings = makeProviderSettingsSchema(
   {
     setupMode: Schema.optionalKey(Schema.Literals(["managed", "existing"])).pipe(
@@ -623,13 +636,26 @@ export const CodexSettings = makeProviderSettingsSchema(
         description: "Additional CLI arguments passed to codex app-server on session start.",
       }),
     ),
+    voice: Schema.optionalKey(
+      Schema.Literals(CODEX_VOICE_OPTIONS.map((option) => option.value)),
+    ).pipe(
+      Schema.annotateKey({
+        title: "Voice",
+        description: "Voice used for spoken replies. Applies to the next voice session.",
+        providerSettingsForm: {
+          control: "select",
+          options: CODEX_VOICE_OPTIONS,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
     customModels: Schema.Array(CustomModelSetting).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs", "voice"],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;

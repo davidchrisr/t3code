@@ -1,4 +1,7 @@
+import * as NodeUtil from "node:util";
+import * as ServerSettings from "../../serverSettings.ts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
+import { makeCodexVoice, readVoiceHandoff } from "../../provider/CodexVoice.ts";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
@@ -28,6 +31,7 @@ import {
 } from "../../provider/codexUsageLimits.ts";
 import {
   CodexSettings,
+  MessageId,
   defaultInstanceIdForDriver,
   isOrchestrationV2WorkActive,
   OrchestrationV2ProviderGoal,
@@ -202,6 +206,7 @@ export function codexProviderTurnTokenUsage(
     updatedAt,
   };
 }
+const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 // Plan flushes store three copies; use the client's assistant-text cadence.
@@ -1358,6 +1363,35 @@ const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
 );
 
+const decodeVoicePolicy = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    model: Schema.String,
+    approvalPolicy: CodexSchema.V2TurnStartParams__AskForApproval,
+    approvalsReviewer: CodexSchema.V2TurnStartParams__ApprovalsReviewer,
+    sandbox: CodexSchema.V2TurnStartParams__SandboxPolicy,
+    collaborationMode: CodexSchema.ClientRequest__CollaborationMode,
+  }),
+);
+
+function normalizedVoiceSandbox(policy: CodexSchema.V2TurnStartParams__SandboxPolicy) {
+  switch (policy.type) {
+    case "dangerFullAccess":
+      return policy;
+    case "readOnly":
+      return { type: policy.type, networkAccess: policy.networkAccess ?? false };
+    case "externalSandbox":
+      return { type: policy.type, networkAccess: policy.networkAccess ?? "restricted" };
+    case "workspaceWrite":
+      return {
+        type: policy.type,
+        networkAccess: policy.networkAccess ?? false,
+        excludeSlashTmp: policy.excludeSlashTmp ?? false,
+        excludeTmpdirEnvVar: policy.excludeTmpdirEnvVar ?? false,
+        writableRoots: [...(policy.writableRoots ?? [])].sort(),
+      };
+  }
+}
+
 const CodexChildSelection = Schema.Struct({
   thread: Schema.Struct({ id: Schema.String }),
   model: Schema.NullOr(Schema.String),
@@ -1699,6 +1733,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const readMcpSession = (threadId: ThreadId | null) =>
     threadId === null ? Effect.succeed(undefined) : mcpSessions.read(threadId);
   const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -1725,7 +1760,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
-        const client = yield* clientFactory.open({
+        const nativeClient = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
           providerSessionId: input.providerSessionId,
@@ -1733,6 +1768,43 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
         });
+        const voiceNotificationTails = new Map<string, Deferred.Deferred<void> | undefined>();
+        let observeVoiceInput: (payload: unknown) => Effect.Effect<void> = () => Effect.void;
+        let observeVoiceTerminal: (payload: unknown) => Effect.Effect<void> = () => Effect.void;
+        let awaitVoiceAdoption: (turnId: string) => Effect.Effect<void> = () => Effect.void;
+        const client: CodexClient.CodexAppServerClient["Service"] = {
+          ...nativeClient,
+          handleServerNotification: (method, handler) =>
+            nativeClient.handleServerNotification(method, (payload) => {
+              const dispatch = () => {
+                const turn = Reflect.get(payload, "turn");
+                const nativeTurnId =
+                  Reflect.get(payload, "turnId") ??
+                  (typeof turn === "object" && turn !== null ? Reflect.get(turn, "id") : undefined);
+                if (typeof nativeTurnId !== "string" || !voiceNotificationTails.has(nativeTurnId))
+                  return handler(payload);
+                // Adoption waits on T3 persistence; keep Codex responses flowing and preserve notification order.
+                return Effect.gen(function* () {
+                  const previous = voiceNotificationTails.get(nativeTurnId);
+                  const done = yield* Deferred.make<void>();
+                  voiceNotificationTails.set(nativeTurnId, done);
+                  yield* (previous === undefined ? Effect.void : Deferred.await(previous)).pipe(
+                    Effect.andThen(() => awaitVoiceAdoption(nativeTurnId)),
+                    Effect.andThen(handler(payload)),
+                    Effect.ensuring(Deferred.succeed(done, undefined)),
+                    Effect.forkIn(scope, { startImmediately: true }),
+                  );
+                });
+              };
+              const observe =
+                method === "item/started"
+                  ? observeVoiceInput(payload)
+                  : method === "turn/completed"
+                    ? observeVoiceTerminal(payload)
+                    : Effect.void;
+              return observe.pipe(Effect.andThen(Effect.suspend(dispatch)));
+            }),
+        };
         const additionalContextByThread = yield* Ref.make(
           new Map<
             string,
@@ -1816,6 +1888,93 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
         );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
+        const voice = yield* makeCodexVoice(
+          client,
+          (request) => continuationRequests?.offer(request) ?? Effect.void,
+        );
+        const pendingVoiceTurns = new Map<
+          string,
+          {
+            readonly startedAt: DateTime.Utc;
+            readonly ready: Deferred.Deferred<void>;
+            readonly voice: NonNullable<ReturnType<typeof voice.current>>;
+            requested: boolean;
+          }
+        >();
+        const voiceAnswers = new Map<string, string>();
+        // Wait before notification handlers acquire the session-wide terminalization permit.
+        awaitVoiceAdoption = (turnId) =>
+          Effect.suspend(() => {
+            const pending = pendingVoiceTurns.get(turnId);
+            return pending === undefined ? Effect.void : Deferred.await(pending.ready);
+          });
+        // A terminal without delegation must release pending adoption.
+        observeVoiceTerminal = Effect.fnUntraced(function* (payload: unknown) {
+          if (typeof payload !== "object" || payload === null) return;
+          const turn: unknown = Reflect.get(payload, "turn");
+          if (typeof turn !== "object" || turn === null) return;
+          const turnId: unknown = Reflect.get(turn, "id");
+          if (typeof turnId !== "string") return;
+          const pending = pendingVoiceTurns.get(turnId);
+          if (!pending || pending.requested) return;
+          pendingVoiceTurns.delete(turnId);
+          voiceAnswers.delete(turnId);
+          yield* (
+            continuationRequests?.offer({
+              threadId: pending.voice.providerThread.appThreadId!,
+              providerThreadId: pending.voice.providerThread.id,
+              driver: CODEX_DRIVER_KIND,
+              detail: null,
+              messageId: MessageId.make(`voice-failure:${turnId}`),
+              voice: { type: "failure" },
+            }) ?? Effect.void
+          );
+          yield* Deferred.succeed(pending.ready, undefined);
+          yield* pending.voice.fail;
+        });
+        const rejectVoiceHandoff = Effect.fn("CodexAdapterV2.rejectVoiceHandoff")(function* (
+          threadId: string,
+          turnId: string,
+        ) {
+          const pending = pendingVoiceTurns.get(turnId);
+          if (pending === undefined) return;
+          pendingVoiceTurns.delete(turnId);
+          voiceNotificationTails.delete(turnId);
+          yield* Deferred.succeed(pending.ready, undefined);
+          yield* pending.voice.fail;
+          yield* client
+            .request("turn/interrupt", { threadId, turnId })
+            .pipe(Effect.ignore, Effect.forkIn(scope));
+        });
+        // Read delegation input before ordered item handlers can wait for its owning run.
+        observeVoiceInput = Effect.fnUntraced(function* (payload: unknown) {
+          if (typeof payload !== "object" || payload === null) return;
+          const turnId: unknown = Reflect.get(payload, "turnId");
+          const threadId: unknown = Reflect.get(payload, "threadId");
+          const item: unknown = Reflect.get(payload, "item");
+          if (
+            typeof turnId !== "string" ||
+            typeof threadId !== "string" ||
+            typeof item !== "object" ||
+            item === null ||
+            Reflect.get(item, "type") !== "userMessage"
+          )
+            return;
+          const pending = pendingVoiceTurns.get(turnId);
+          if (!pending || pending.requested || !continuationRequests) return;
+          const text = readVoiceHandoff(item);
+          if (text === undefined) return yield* rejectVoiceHandoff(threadId, turnId);
+          pending.requested = true;
+          yield* continuationRequests.offer({
+            threadId: pending.voice.providerThread.appThreadId!,
+            providerThreadId: pending.voice.providerThread.id,
+            driver: CODEX_DRIVER_KIND,
+            detail: text,
+            messageId: MessageId.make(`voice-handoff:${turnId}`),
+            voice: { type: "handoff", nativeTurnId: turnId, ...pending.voice.threadSettings },
+            onVoiceFailure: rejectVoiceHandoff(threadId, turnId),
+          });
+        });
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
@@ -2066,6 +2225,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const context = (yield* Ref.get(activeTurns)).get(nativeTurnId);
           if (context !== undefined || attemptsRemaining <= 0) {
             return context;
+          }
+          const voiceTurn = pendingVoiceTurns.get(nativeTurnId);
+          if (voiceTurn !== undefined) {
+            yield* Deferred.await(voiceTurn.ready);
+            return (yield* Ref.get(activeTurns)).get(nativeTurnId);
           }
           yield* Effect.yieldNow;
           return yield* awaitActiveTurn(nativeTurnId, attemptsRemaining - 1);
@@ -4491,6 +4655,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 );
               return;
             }
+            const voiceOwner = voice.current();
+            if (
+              voiceOwner?.providerThread.nativeThreadRef?.nativeId === payload.threadId &&
+              rootProviderThreads.has(payload.threadId)
+            ) {
+              if (!pendingVoiceTurns.has(payload.turn.id)) {
+                pendingVoiceTurns.set(payload.turn.id, {
+                  startedAt: codexTimestamp(payload.turn.startedAt),
+                  ready: yield* Deferred.make<void>(),
+                  voice: voiceOwner,
+                  requested: false,
+                });
+                voiceNotificationTails.set(payload.turn.id, undefined);
+              }
+              return;
+            }
             yield* rememberSubagentTurnStarted({
               nativeThreadId: payload.threadId,
               nativeTurnId: payload.turn.id,
@@ -5082,6 +5262,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               itemId: payload.item.id,
               finalText: payload.item.text,
             });
+            if (
+              finalAnswer &&
+              context.input.adoptedNativeTurnId !== undefined &&
+              text.trim() !== ""
+            )
+              voiceAnswers.set(payload.turnId, text);
             yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
               const itemIds = current.get(payload.turnId);
               if (itemIds === undefined || !itemIds.has(payload.item.id)) {
@@ -6122,9 +6308,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
-            const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
+            const context = yield* awaitActiveTurn(payload.turn.id);
             if (context === undefined) {
+              voiceNotificationTails.delete(payload.turn.id);
               return;
+            }
+            const answer = voiceAnswers.get(payload.turn.id);
+            const voiceOwner = pendingVoiceTurns.get(payload.turn.id)?.voice;
+            voiceAnswers.delete(payload.turn.id);
+            if (
+              answer !== undefined &&
+              voiceOwner !== undefined &&
+              payload.turn.status === "completed"
+            ) {
+              yield* voice
+                .speak(payload.threadId, answer, voiceOwner.sessionId)
+                .pipe(Effect.ignore, Effect.forkIn(scope));
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
             const status =
@@ -6146,6 +6345,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       : { failureErrorInfo: payload.turn.error.codexErrorInfo }),
                   }),
             });
+            pendingVoiceTurns.delete(payload.turn.id);
+            voiceNotificationTails.delete(payload.turn.id);
           }),
         );
 
@@ -6547,6 +6748,98 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         };
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+          ...(continuationRequests === undefined
+            ? {}
+            : {
+                startVoiceSession: (voiceInput: {
+                  readonly providerThread: OrchestrationV2ProviderThread;
+                  readonly offerSdp: string;
+                  readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+                  readonly threadSettings: Pick<
+                    OrchestrationV2AppThread,
+                    "modelSelection" | "runtimeMode" | "interactionMode"
+                  >;
+                }) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      yield* ensureInitialized;
+                      const threadId = yield* getNativeThreadId(voiceInput.providerThread);
+                      const settings = yield* buildCodexTurnStartParams({
+                        nativeThreadId: threadId,
+                        codexInput: [],
+                        runtimePolicy: voiceInput.runtimePolicy,
+                        modelSelection: voiceInput.threadSettings.modelSelection,
+                      });
+                      if (
+                        settings.sandboxPolicy == null ||
+                        settings.approvalPolicy == null ||
+                        settings.collaborationMode === undefined
+                      )
+                        return yield* toProtocolError(
+                          "Voice requires an explicit native permission policy.",
+                        );
+                      yield* client.raw.request("thread/settings/update", {
+                        threadId,
+                        cwd: settings.cwd,
+                        model: settings.model,
+                        approvalPolicy: settings.approvalPolicy,
+                        approvalsReviewer: settings.approvalsReviewer,
+                        sandboxPolicy: settings.sandboxPolicy,
+                        collaborationMode: settings.collaborationMode,
+                        effort: settings.effort,
+                        serviceTier: settings.serviceTier ?? null,
+                      });
+                      // Resume reports effective settings; the update response contains no policy fields.
+                      const applied = yield* client.raw
+                        .request("thread/resume", { threadId, excludeTurns: true })
+                        .pipe(Effect.flatMap(decodeVoicePolicy));
+                      if (
+                        applied.model !== settings.model ||
+                        !NodeUtil.isDeepStrictEqual(
+                          applied.approvalPolicy,
+                          settings.approvalPolicy,
+                        ) ||
+                        applied.approvalsReviewer !== settings.approvalsReviewer ||
+                        !NodeUtil.isDeepStrictEqual(
+                          normalizedVoiceSandbox(applied.sandbox),
+                          normalizedVoiceSandbox(settings.sandboxPolicy),
+                        ) ||
+                        applied.collaborationMode.mode !== settings.collaborationMode.mode ||
+                        applied.collaborationMode.settings.model !==
+                          settings.collaborationMode.settings.model
+                      )
+                        return yield* toProtocolError(
+                          "Codex did not apply the requested voice permission policy.",
+                        );
+                      let voiceSettings = adapterOptions.settings;
+                      if (Option.isSome(serverSettings)) {
+                        const current = yield* serverSettings.value.getSettings;
+                        const instance = current.providerInstances[adapterOptions.instanceId];
+                        if (
+                          instance === undefined &&
+                          adapterOptions.instanceId === CODEX_DEFAULT_INSTANCE_ID
+                        ) {
+                          voiceSettings = DEFAULT_CODEX_SETTINGS;
+                        } else {
+                          if (instance?.driver !== CODEX_DRIVER_KIND)
+                            return yield* toProtocolError("Codex voice settings are unavailable.");
+                          voiceSettings = yield* decodeCodexSettings(instance.config ?? {});
+                        }
+                      }
+                      yield* rememberRootProviderThread(voiceInput.providerThread);
+                      return voice.start({ ...voiceInput, voice: voiceSettings.voice });
+                    }),
+                  ).pipe(
+                    Stream.mapError(
+                      (cause) =>
+                        new ProviderAdapter.ProviderAdapterProtocolError({
+                          driver: CODEX_DRIVER_KIND,
+                          detail: "Could not start voice.",
+                          cause,
+                        }),
+                    ),
+                  ),
+              }),
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
           providerSessionId: input.providerSessionId,
@@ -6754,6 +7047,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ),
           ),
           startTurn: (turnInput) => {
+            if (turnInput.adoptedNativeTurnId !== undefined) {
+              return Effect.gen(function* () {
+                const nativeTurnId = turnInput.adoptedNativeTurnId!;
+                const pending = pendingVoiceTurns.get(nativeTurnId);
+                if (
+                  pending === undefined ||
+                  turnInput.providerThread.id !== pending.voice.providerThread.id
+                )
+                  return yield* toProtocolError("The native voice turn is no longer available.");
+                yield* registerRootTurn({ turnInput, nativeTurnId, startedAt: pending.startedAt });
+                yield* Deferred.succeed(pending.ready, undefined);
+              });
+            }
             const goalCommand =
               turnInput.message.attachments.length === 0 &&
               turnInput.restartContinuationOfRunId === undefined

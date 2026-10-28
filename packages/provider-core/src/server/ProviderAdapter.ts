@@ -27,6 +27,7 @@ import {
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
+  ProviderVoiceSessionEvent,
   RuntimeMode,
   RuntimeRequestId,
   RunAttemptId,
@@ -417,6 +418,7 @@ export interface ProviderAdapterV2EnsureThreadInput {
 }
 
 export interface ProviderAdapterV2TurnInput {
+  readonly adoptedNativeTurnId?: string;
   readonly appThread: OrchestrationV2AppThread;
   readonly threadId: ThreadId;
   readonly runId: RunId;
@@ -544,6 +546,15 @@ export type ProviderAdapterV2SubagentOutcome = {
 };
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly startVoiceSession?: (input: {
+    readonly providerThread: OrchestrationV2ProviderThread;
+    readonly offerSdp: string;
+    readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+    readonly threadSettings: Pick<
+      OrchestrationV2AppThread,
+      "modelSelection" | "runtimeMode" | "interactionMode"
+    >;
+  }) => Stream.Stream<ProviderVoiceSessionEvent, ProviderAdapterV2Error>;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

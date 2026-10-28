@@ -1,8 +1,10 @@
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   isOrchestrationV2WorkActive,
+  isProviderNativeSubagentThread,
   ModelSelection,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
@@ -10,6 +12,9 @@ import {
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderVoiceSessionError,
+  type ProviderVoiceSessionInput,
+  type ProviderVoiceSessionEvent,
   ThreadId,
   type ProviderThreadId,
 } from "@t3tools/contracts";
@@ -17,6 +22,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -52,6 +58,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -143,6 +150,9 @@ export const ProviderSessionManagerV2Error = Schema.Union([
 export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error.Type;
 
 export interface ProviderSessionManagerV2Shape {
+  readonly startVoiceSession: (
+    input: ProviderVoiceSessionInput,
+  ) => Stream.Stream<ProviderVoiceSessionEvent, ProviderVoiceSessionError>;
   readonly shutdown: Effect.Effect<void>;
   readonly open: (input: {
     readonly threadId: ThreadId;
@@ -318,6 +328,7 @@ export const layerWithOptions = (
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const voiceRuntimePolicy = yield* Effect.serviceOption(RuntimePolicy.RuntimePolicyV2);
       const agentScope = yield* AgentScope;
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
@@ -375,6 +386,18 @@ export const layerWithOptions = (
           }),
       );
       const sessions = yield* Ref.make(new Map<string, LiveSessionEntry>());
+      const voiceOwners = new Map<
+        string,
+        { readonly threadId: ThreadId; readonly ended: Deferred.Deferred<void> }
+      >();
+      const endVoice = Effect.fn("ProviderSessionManager.endVoice")(function* (
+        key: string,
+        threadId?: ThreadId,
+      ) {
+        const owner = voiceOwners.get(key);
+        if (owner !== undefined && (threadId === undefined || owner.threadId === threadId))
+          yield* Deferred.succeed(owner.ended, undefined);
+      });
       // Retry per released entry; reusing ids must not lose cleanup for earlier threads.
       const releaseRecordRetries = yield* FiberSet.make();
       const nextSubscriberId = yield* Ref.make(0);
@@ -972,6 +995,7 @@ export const layerWithOptions = (
               onNone: () => Effect.void,
               onSome: (entry) =>
                 Effect.gen(function* () {
+                  yield* endVoice(sessionKey(entry.runtime.providerSessionId));
                   const releasedBackgroundTasks = yield* readReleasedBackgroundTasks({
                     entry,
                     reason: input.reason,
@@ -2038,7 +2062,141 @@ export const layerWithOptions = (
         ),
       );
 
+      let voiceOrdinal = -1;
       return ProviderSessionManagerV2.of({
+        startVoiceSession: (input) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const afterSequence = yield* eventSink.latestSequence({ threadId: input.threadId });
+              const projection = yield* projectionStore.getThreadRecords(input.threadId, [
+                "providerThreads",
+              ]);
+              const providerThread = projection.providerThreads.find(
+                (thread) => thread.id === projection.thread.activeProviderThreadId,
+              );
+              const runtime = providerThread?.providerSessionId
+                ? (yield* Ref.get(sessions)).get(sessionKey(providerThread.providerSessionId))
+                    ?.exposedRuntime
+                : undefined;
+              if (
+                !providerThread ||
+                !runtime ||
+                providerThread.providerInstanceId !== projection.thread.modelSelection.instanceId ||
+                projection.thread.archivedAt !== null ||
+                projection.thread.deletedAt !== null
+              )
+                return yield* new ProviderVoiceSessionError({
+                  threadId: input.threadId,
+                  reason: "unavailable",
+                });
+              if (!runtime.startVoiceSession)
+                return yield* new ProviderVoiceSessionError({
+                  threadId: input.threadId,
+                  reason: "unsupported",
+                });
+              if (isProviderNativeSubagentThread(projection.thread))
+                return yield* new ProviderVoiceSessionError({
+                  threadId: input.threadId,
+                  reason: "unsupported",
+                });
+              const startVoiceSession = runtime.startVoiceSession;
+              const key = sessionKey(runtime.providerSessionId);
+              const owner = { threadId: input.threadId, ended: yield* Deferred.make<void>() };
+              if (voiceOwners.has(key))
+                return yield* new ProviderVoiceSessionError({
+                  threadId: input.threadId,
+                  reason: "busy",
+                });
+              voiceOwners.set(key, owner);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (voiceOwners.get(key) === owner) voiceOwners.delete(key);
+                }),
+              );
+              const settingsChanged = eventSink
+                .stream({ threadId: input.threadId, afterSequence })
+                .pipe(
+                  Stream.filter(({ event }) =>
+                    [
+                      "thread.metadata-updated",
+                      "thread.runtime-mode-updated",
+                      "thread.interaction-mode-updated",
+                      "thread.model-selection-updated",
+                      "thread.provider-switched",
+                      "thread.archived",
+                      "thread.deleted",
+                    ].includes(event.type),
+                  ),
+                  Stream.mapEffect(() => projectionStore.getThread(input.threadId)),
+                  Stream.filter(
+                    (thread) =>
+                      thread.archivedAt !== null ||
+                      thread.deletedAt !== null ||
+                      thread.activeProviderThreadId !== providerThread.id ||
+                      thread.runtimeMode !== projection.thread.runtimeMode ||
+                      thread.interactionMode !== projection.thread.interactionMode ||
+                      !modelSelectionsEqual(
+                        thread.modelSelection,
+                        projection.thread.modelSelection,
+                      ),
+                  ),
+                  Stream.take(1),
+                  Stream.runDrain,
+                );
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  const ordinal = voiceOrdinal--;
+                  yield* holdThreadLoaded({
+                    providerSessionId: runtime.providerSessionId,
+                    threadId: input.threadId,
+                    providerThread,
+                  });
+                  yield* Effect.acquireRelease(
+                    markBusy(runtime.providerSessionId, busyTurnKey(providerThread.id, ordinal)),
+                    () =>
+                      markIdle(runtime.providerSessionId, providerThread.id, ordinal).pipe(
+                        Effect.ignore,
+                      ),
+                  );
+                  if (Option.isNone(voiceRuntimePolicy))
+                    return yield* new ProviderVoiceSessionError({
+                      threadId: input.threadId,
+                      reason: "unavailable",
+                    });
+                  const policy = yield* voiceRuntimePolicy.value.resolve({
+                    thread: projection.thread,
+                    modelSelection: projection.thread.modelSelection,
+                  });
+                  yield* runtime.resumeThread({
+                    threadId: input.threadId,
+                    providerThread,
+                    modelSelection: projection.thread.modelSelection,
+                    runtimePolicy: policy,
+                  });
+                  return startVoiceSession({
+                    providerThread,
+                    offerSdp: input.offerSdp,
+                    runtimePolicy: policy,
+                    threadSettings: projection.thread,
+                  });
+                }),
+              ).pipe(
+                Stream.interruptWhen(
+                  Effect.raceFirst(settingsChanged, Deferred.await(owner.ended)),
+                ),
+              );
+            }),
+          ).pipe(
+            Stream.mapError((cause) =>
+              cause._tag === "ProviderVoiceSessionError"
+                ? cause
+                : new ProviderVoiceSessionError({
+                    threadId: input.threadId,
+                    reason: "provider",
+                    cause,
+                  }),
+            ),
+          ),
         shutdown,
         open: (input) =>
           sessionOpen.withLock(
@@ -2287,6 +2445,7 @@ export const layerWithOptions = (
         detach: Effect.fn("ProviderSessionManager.detach")(
           function* (input) {
             const key = sessionKey(input.providerSessionId);
+            yield* endVoice(key, input.threadId);
             const currentEntry = (yield* Ref.get(sessions)).get(key);
             let detachedProviderThreads: ReadonlyArray<OrchestrationV2ProviderThread> = [];
             if (currentEntry?.supportsMultipleProviderThreads === true) {

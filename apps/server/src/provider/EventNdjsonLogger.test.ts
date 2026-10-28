@@ -18,11 +18,28 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   makeEventNdjsonLogger,
   makeEventNdjsonLogStore,
+  shouldPersistProviderEvent,
   type PendingRecord,
   writeBatchedMessages,
 } from "./EventNdjsonLogger.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+it("excludes voice transcripts and signaling from native diagnostic logs", () => {
+  for (const method of [
+    "thread/realtime/start",
+    "thread/realtime/sdp",
+    "thread/realtime/transcript/done",
+    "thread/realtime/appendSpeech",
+  ]) {
+    assert.isFalse(
+      shouldPersistProviderEvent("native", {
+        stage: "decoded",
+        payload: { method, params: { text: "private", sdp: "private" } },
+      }),
+    );
+  }
+  assert.isTrue(shouldPersistProviderEvent("native", { method: "turn/completed" }));
+});
 const decodeUnknownJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 function ownedLogPath(basePath: string, segment: string): string {

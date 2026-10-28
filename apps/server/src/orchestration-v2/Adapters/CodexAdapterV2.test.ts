@@ -8,6 +8,7 @@ import {
   CommandId,
   CheckpointId,
   CodexSettings,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -19,6 +20,7 @@ import {
   type OrchestrationV2TurnItem,
   ProjectId,
   type ProviderApprovalDecision,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -29,6 +31,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import type * as CodexSchema from "effect-codex-app-server/schema";
@@ -943,6 +946,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   (client) =>
                     ({
                       ...client,
+                      raw: {
+                        ...client.raw,
+                        request: (method, params) =>
+                          onRequest(method, params).pipe(
+                            Effect.andThen(client.raw.request(method, params)),
+                          ),
+                      },
                       request: (method, params) =>
                         onRequest(method, params).pipe(
                           Effect.andThen(client.request(method, params)),
@@ -1035,6 +1045,376 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         awaitTerminal: (count: number) => changes.until(() => terminalEvents().length >= count),
       };
     });
+
+  it.effect.each([false, true])(
+    "handles native voice completion with early terminal %s without replay",
+    (earlyTerminal) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "voice-adopt-thread";
+          const nativeTurnId = "voice-adopt-turn";
+          const prompt = "Change the title";
+          const calls: string[] = [];
+          const savedSettings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
+          const selectedVoice = earlyTerminal ? undefined : "maple";
+          const voicePolicy = {
+            ...CODEX_TEST_RUNTIME_POLICY,
+            runtimeMode: "approval-required" as const,
+            interactionMode: "plan" as const,
+          };
+          const nativeSettings = yield* CodexAdapterV2.buildCodexTurnStartParams({
+            nativeThreadId,
+            codexInput: [],
+            runtimePolicy: voicePolicy,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+          });
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario: "voice-adopt",
+              entries: [
+                ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }).slice(0, 5),
+                {
+                  type: "expect_outbound",
+                  label: "apply voice policy",
+                  frame: {
+                    id: 3,
+                    method: "thread/settings/update",
+                    params: {
+                      threadId: nativeThreadId,
+                      cwd: nativeSettings.cwd,
+                      model: nativeSettings.model,
+                      approvalPolicy: "untrusted",
+                      approvalsReviewer: "user",
+                      sandboxPolicy: { type: "readOnly" },
+                      collaborationMode: nativeSettings.collaborationMode,
+                      ...(nativeSettings.effort === undefined
+                        ? {}
+                        : { effort: nativeSettings.effort }),
+                      serviceTier: null,
+                    },
+                  },
+                },
+                { type: "emit_inbound", label: "policy applied", frame: { id: 3, result: {} } },
+                {
+                  type: "expect_outbound",
+                  label: "verify effective voice policy",
+                  frame: {
+                    id: 4,
+                    method: "thread/resume",
+                    params: { threadId: nativeThreadId, excludeTurns: true },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "effective voice policy",
+                  frame: {
+                    id: 4,
+                    result: {
+                      model: CODEX_TEST_MODEL_SELECTION.model,
+                      approvalPolicy: "untrusted",
+                      approvalsReviewer: "user",
+                      sandbox: { type: "readOnly", networkAccess: false },
+                      collaborationMode: nativeSettings.collaborationMode,
+                    },
+                  },
+                },
+                {
+                  type: "expect_outbound",
+                  label: "voice start",
+                  frame: {
+                    id: 5,
+                    method: "thread/realtime/start",
+                    params: {
+                      threadId: nativeThreadId,
+                      outputModality: "audio",
+                      transport: { type: "webrtc", sdp: "offer" },
+                      version: "v3",
+                      clientManagedHandoffs: true,
+                      includeStartupContext: true,
+                      ...(selectedVoice === undefined ? {} : { voice: selectedVoice }),
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "voice start response",
+                  frame: { id: 5, result: {} },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "native handoff",
+                  frame: {
+                    method: "turn/started",
+                    params: {
+                      threadId: nativeThreadId,
+                      turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "handoff input",
+                  frame: {
+                    method: "item/started",
+                    params: {
+                      threadId: nativeThreadId,
+                      turnId: nativeTurnId,
+                      startedAtMs: 1782622440400,
+                      item: { type: "contextCompaction", id: "voice-compaction" },
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "sibling notification between compaction and delegation",
+                  frame: {
+                    method: "thread/goal/cleared",
+                    params: { threadId: "sibling-native-thread" },
+                  },
+                },
+                ...(earlyTerminal
+                  ? []
+                  : [
+                      {
+                        type: "emit_inbound" as const,
+                        label: "delegation after compaction",
+                        frame: {
+                          method: "item/started",
+                          params: {
+                            threadId: nativeThreadId,
+                            turnId: nativeTurnId,
+                            startedAtMs: 1782622440500,
+                            item: {
+                              type: "userMessage",
+                              id: "voice-user",
+                              content: [
+                                {
+                                  type: "text",
+                                  text: `<realtime_delegation><input>${prompt}</input></realtime_delegation>`,
+                                  text_elements: [],
+                                },
+                              ],
+                            },
+                          },
+                        },
+                      },
+                    ]),
+                {
+                  type: "emit_inbound",
+                  label: "failed native turn",
+                  frame: {
+                    method: "turn/completed",
+                    params: {
+                      threadId: nativeThreadId,
+                      turn: makeCodexReplayTurn({ id: nativeTurnId, status: "failed" }),
+                    },
+                  },
+                },
+                {
+                  type: "expect_outbound",
+                  label: "voice stop",
+                  frame: {
+                    id: 6,
+                    method: "thread/realtime/stop",
+                    params: { threadId: nativeThreadId },
+                  },
+                },
+                { type: "emit_inbound", label: "voice stopped", frame: { id: 6, result: {} } },
+              ],
+            }),
+            undefined,
+            (method) =>
+              Effect.sync(() => {
+                calls.push(method);
+              }),
+          ).pipe(
+            Effect.provide(
+              Layer.mock(ServerSettings.ServerSettingsService)({
+                getSettings: Ref.get(savedSettings),
+              }),
+            ),
+          );
+          yield* Ref.set(
+            savedSettings,
+            selectedVoice === undefined
+              ? DEFAULT_SERVER_SETTINGS
+              : {
+                  ...DEFAULT_SERVER_SETTINGS,
+                  providerInstances: {
+                    [CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID]: {
+                      driver: ProviderDriverKind.make("codex"),
+                      config: { voice: selectedVoice },
+                    },
+                  },
+                },
+          );
+          const voiceFiber = yield* harness.runtime.startVoiceSession!({
+            providerThread: harness.providerThread,
+            offerSdp: "offer",
+            runtimePolicy: voicePolicy,
+            threadSettings: {
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimeMode: "approval-required",
+              interactionMode: "plan",
+            },
+          }).pipe(Stream.runDrain, Effect.exit, Effect.forkScoped);
+          yield* Effect.raceFirst(
+            harness.until(() => harness.continuationRequests.length === 1),
+            Fiber.join(voiceFiber).pipe(
+              Effect.andThen(Effect.die("Voice ended before native handoff")),
+            ),
+          );
+          if (earlyTerminal) {
+            const exit = yield* Fiber.join(voiceFiber);
+            assert.equal(exit._tag, "Failure");
+            assert.equal(harness.continuationRequests[0]?.voice?.type, "failure");
+            assert.notInclude(calls, "turn/start");
+            assert.notInclude(calls, "turn/interrupt");
+            assert.lengthOf(harness.continuationRequests, 1);
+            return;
+          }
+          assert.deepEqual(harness.continuationRequests[0]?.voice, {
+            type: "handoff",
+            nativeTurnId,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          });
+          yield* harness.runtime.startTurn({
+            ...makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("voice-adoption"),
+              text: prompt,
+            }),
+            adoptedNativeTurnId: nativeTurnId,
+          });
+          yield* harness.awaitTerminal(1);
+          assert.equal(harness.terminalEvents()[0]?.status, "failed");
+          assert.notInclude(calls, "turn/start");
+          assert.notInclude(calls, "turn/interrupt");
+          assert.lengthOf(harness.continuationRequests, 1);
+          yield* Fiber.interrupt(voiceFiber);
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  it.effect.each(["unsupported", "permissions", "mode", "missing-policy"] as const)(
+    "refuses voice startup with %s native policy confirmation",
+    (scenario) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "voice-policy-thread";
+          const policy = {
+            ...CODEX_TEST_RUNTIME_POLICY,
+            runtimeMode: "approval-required" as const,
+            interactionMode: "plan" as const,
+          };
+          const settings = yield* CodexAdapterV2.buildCodexTurnStartParams({
+            nativeThreadId,
+            codexInput: [],
+            runtimePolicy: policy,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+          });
+          const calls: string[] = [];
+          const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId: "unused",
+              prompt: "unused",
+            }).slice(0, 5),
+            {
+              type: "expect_outbound",
+              label: "apply policy",
+              frame: {
+                id: 3,
+                method: "thread/settings/update",
+                params: {
+                  threadId: nativeThreadId,
+                  cwd: settings.cwd,
+                  model: settings.model,
+                  approvalPolicy: "untrusted",
+                  approvalsReviewer: "user",
+                  sandboxPolicy: { type: "readOnly" },
+                  collaborationMode: settings.collaborationMode,
+                  ...(settings.effort === undefined ? {} : { effort: settings.effort }),
+                  serviceTier: null,
+                },
+              },
+            },
+          ];
+          if (scenario === "unsupported")
+            entries.push({
+              type: "emit_inbound",
+              label: "unsupported settings",
+              frame: { id: 3, error: { code: -32601, message: "Unknown method" } },
+            });
+          else
+            entries.push(
+              { type: "emit_inbound", label: "update acknowledged", frame: { id: 3, result: {} } },
+              {
+                type: "expect_outbound",
+                label: "verify settings",
+                frame: {
+                  id: 4,
+                  method: "thread/resume",
+                  params: { threadId: nativeThreadId, excludeTurns: true },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "unapplied settings",
+                frame: {
+                  id: 4,
+                  result:
+                    scenario === "missing-policy"
+                      ? {}
+                      : {
+                          model: CODEX_TEST_MODEL_SELECTION.model,
+                          approvalPolicy: scenario === "permissions" ? "never" : "untrusted",
+                          approvalsReviewer: "user",
+                          sandbox: { type: "readOnly" },
+                          collaborationMode: {
+                            ...settings.collaborationMode,
+                            mode: scenario === "mode" ? "default" : "plan",
+                          },
+                        },
+                },
+              },
+            );
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({ scenario: "voice-policy", entries }),
+            undefined,
+            (method) =>
+              Effect.sync(() => {
+                calls.push(method);
+              }),
+          );
+          const result = yield* harness.runtime.startVoiceSession!({
+            providerThread: harness.providerThread,
+            offerSdp: "offer",
+            runtimePolicy: policy,
+            threadSettings: {
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimeMode: "approval-required",
+              interactionMode: "plan",
+            },
+          }).pipe(Stream.runDrain, Effect.result);
+          assert.equal(result._tag, "Failure");
+          assert.include(calls, "thread/settings/update");
+          assert.notInclude(calls, "thread/realtime/start");
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
 
   it.effect.each(["supported", "unsupported", "invalid"] as const)(
     "delivers native history with %s app-server protocol",

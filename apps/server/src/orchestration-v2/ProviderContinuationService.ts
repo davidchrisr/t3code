@@ -75,6 +75,40 @@ export const layer = Layer.effectDiscard(
 
     const dispatchContinuation = Effect.fn("ProviderContinuationService.dispatchContinuation")(
       function* (request: ProviderContinuationRequests.ProviderContinuationRequest) {
+        if (request.voice !== undefined && request.messageId !== undefined) {
+          const commandId = CommandId.make(`voice:${request.messageId}`);
+          if (request.voice.type === "failure") {
+            yield* threads.dispatch({
+              type: "voice.failure.record",
+              commandId,
+              threadId: request.threadId,
+              messageId: request.messageId,
+            });
+          } else if (request.voice.type === "transcript") {
+            yield* threads.dispatch({
+              type: "voice.transcript.record",
+              commandId,
+              threadId: request.threadId,
+              messageId: request.messageId,
+              role: request.voice.role,
+              text: request.detail ?? "",
+            });
+          } else {
+            yield* threads.dispatch({
+              type: "voice.handoff",
+              modelSelection: request.voice.modelSelection,
+              runtimeMode: request.voice.runtimeMode,
+              interactionMode: request.voice.interactionMode,
+              commandId,
+              threadId: request.threadId,
+              providerThreadId: request.providerThreadId,
+              nativeTurnId: request.voice.nativeTurnId,
+              messageId: request.messageId,
+              text: request.detail ?? "",
+            });
+          }
+          return;
+        }
         const projection = yield* threads.getThreadRecords(
           request.threadId,
           ["messages", "runs", "providerTurns"],
@@ -239,6 +273,7 @@ export const layer = Layer.effectDiscard(
         dispatchContinuation(request).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
+              yield* request.onVoiceFailure ?? Effect.void;
               yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
                 threadId: request.threadId,
                 providerThreadId: request.providerThreadId,

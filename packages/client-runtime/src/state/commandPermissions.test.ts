@@ -19,13 +19,14 @@ import {
   type AuthSessionState,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
-import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createEnvironmentRpcCommand, createEnvironmentRpcStreamCommand } from "./runtime.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -60,6 +61,82 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("cancels the protected voice stream on abort and denies a revoked grant", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const entered = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        let starts = 0;
+        const session = {
+          client: {
+            [WS_METHODS.providerVoiceSession]: () =>
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  starts++;
+                  yield* Effect.addFinalizer(() => Deferred.succeed(stopped, undefined));
+                  yield* Deferred.succeed(entered, undefined);
+                  return Stream.never;
+                }),
+              ),
+          },
+        } as unknown as RpcSession;
+        const supervisor = {
+          target: { environmentId: env, label: "target" },
+          session: yield* SubscriptionRef.make(Option.some(session)),
+        } as unknown as EnvironmentSupervisor["Service"];
+        const voiceRuntime = Atom.runtime(
+          Layer.succeed(EnvironmentRegistry, {
+            run: (_id: EnvironmentId, effect: Effect.Effect<unknown>) =>
+              Effect.provideService(effect, EnvironmentSupervisor, supervisor),
+          } as unknown as EnvironmentRegistry["Service"]),
+        );
+        const command = createEnvironmentRpcStreamCommand(voiceRuntime, {
+          label: "test.voice",
+          tag: WS_METHODS.providerVoiceSession,
+        });
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        const abort = new AbortController();
+        const input = {
+          payload: { threadId: ThreadId.make("thread"), offerSdp: "offer" },
+          signal: abort.signal,
+          onEvent: () => undefined,
+        };
+        const pending = yield* Effect.promise(() =>
+          command.run(registry, { environmentId: env, input }),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        abort.abort();
+        yield* Deferred.await(stopped);
+        expect((yield* Fiber.join(pending))._tag).toBe("Success");
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        const denied = yield* Effect.promise(() =>
+          command.run(registry, {
+            environmentId: env,
+            input: { ...input, signal: new AbortController().signal },
+          }),
+        );
+        expect(denied._tag).toBe("Failure");
+        expect(starts).toBe(1);
+      }),
+    ),
+  );
+  it.effect("requires the destination operate grant to start a voice session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const voice = createCommandPermissions(runtime, WS_METHODS.providerVoiceSession);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(voice.permissionAtom(env))).toBe(false);
+        expect((yield* voice.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(voice.permissionAtom(env))).toBe(true);
+        yield* voice.authorize(registry, env);
+      }),
+    ),
+  );
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -26,6 +26,7 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
+  ProviderDriverKind,
   type NodeId,
   type ModelSelection,
   OrchestrationV2Command,
@@ -457,6 +458,9 @@ const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLin
 
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
   switch (command.type) {
+    case "voice.handoff":
+    case "voice.failure.record":
+    case "voice.transcript.record":
     case "thread.create":
     case "thread.archive":
     case "thread.unarchive":
@@ -1436,21 +1440,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
-        projection.runs.some(isBlockingRun) ||
-        projection.runs.some((run) => run.status === "queued" && run.queueHeld === true)
+        projection.runs.some(isBlockingRun)
       ) {
         return;
       }
 
+      const nativeAdoption = projection.runs
+        .filter((run) => run.status === "queued" && run.adoptedNativeTurnId !== undefined)
+        .toSorted((a, b) => a.ordinal - b.ordinal)[0];
       const storedQueuedRun =
         options?.queuedRunId === undefined
-          ? nextQueuedRun(projection)
+          ? (nativeAdoption ?? nextQueuedRun(projection))
           : projection.runs.find(
               (run) => run.id === options.queuedRunId && run.status === "queued",
             );
       if (storedQueuedRun === undefined) {
         return;
       }
+      if (
+        (storedQueuedRun.queueHeld === true && storedQueuedRun.adoptedNativeTurnId === undefined) ||
+        (nativeAdoption !== undefined && storedQueuedRun.id !== nativeAdoption.id) ||
+        (storedQueuedRun.adoptedNativeTurnId === undefined &&
+          projection.runs.some((run) => run.status === "queued" && run.queueHeld === true))
+      )
+        return;
       const queuedMessage = projection.messages.find(
         (candidate) => candidate.id === storedQueuedRun.userMessageId,
       );
@@ -1461,7 +1474,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: modelSelection.instanceId,
       };
       // A limited provider would fail and consume every waiting message.
-      if (usageLimitHoldsQueue(projection, queuedRun.providerInstanceId)) {
+      if (
+        queuedRun.adoptedNativeTurnId === undefined &&
+        usageLimitHoldsQueue(projection, queuedRun.providerInstanceId)
+      ) {
         return;
       }
       // Failed worktree creation would run queued work in the project checkout; wait for the user.
@@ -1499,7 +1515,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const now = yield* DateTime.now;
         yield* writeSystemEvents(
           projection.runs
-            .filter((run) => run.status === "queued")
+            .filter((run) => run.status === "queued" && run.adoptedNativeTurnId === undefined)
             .map((run) => ({
               type: "run.updated" as const,
               threadId,
@@ -1509,7 +1525,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               payload: { ...run, queueHeld: true },
             })),
         );
-        return;
+        if (queuedRun.adoptedNativeTurnId === undefined) return;
       }
       // Move queued ordinals after runs that started while they waited to preserve transcript and checkpoint order.
       // Started runs have prompts; cancelled queued messages do not.
@@ -1849,6 +1865,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       };
       const startingRun: OrchestrationV2Run = {
         ...queuedRun,
+        ...(queuedRun.adoptedNativeTurnId === undefined ? {} : { queueHeld: false }),
         providerThreadId: queuedProviderThread.id,
         ordinal,
         status: "starting",
@@ -4941,8 +4958,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    adoptedNativeTurnId?: string,
   ) {
     let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    if (adoptedNativeTurnId !== undefined) {
+      for (const queued of projection.runs.filter((run) => run.status === "queued")) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: queued.id,
+          occurredAt: yield* DateTime.now,
+          payload: { ...queued, queuePosition: (queued.queuePosition ?? queued.ordinal) + 1 },
+        });
+      }
+    }
     if (command.manualContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.manualContinuationOfRunId);
       const limited = latestRootProviderFailure(source ?? null, projection.turnItems);
@@ -5397,7 +5429,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (command.creationSource === "web" || command.creationSource === "mobile") &&
       command.scheduledTaskId === undefined;
     const heldRunsToRelease =
-      sentByUserFromClient && startsOrQueuesRun && !worktreeSetupUnresolved
+      adoptedNativeTurnId === undefined &&
+      sentByUserFromClient &&
+      startsOrQueuesRun &&
+      !worktreeSetupUnresolved
         ? projection.runs.filter((run) => run.status === "queued" && run.queueHeld === true)
         : [];
     const releasedAt = yield* DateTime.now;
@@ -5512,6 +5547,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ),
             );
       const run: OrchestrationV2Run = {
+        ...(adoptedNativeTurnId === undefined ? {} : { adoptedNativeTurnId }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -5522,20 +5558,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         rootNodeId,
         activeAttemptId: attemptId,
         status: "queued",
-        ...(worktreeMissingRun !== undefined ||
-        (heldRunsToRelease.length === 0 &&
-          projection.runs.some(
-            (candidate) => candidate.status === "queued" && candidate.queueHeld === true,
-          ))
+        ...(adoptedNativeTurnId === undefined &&
+        (worktreeMissingRun !== undefined ||
+          (heldRunsToRelease.length === 0 &&
+            projection.runs.some(
+              (candidate) => candidate.status === "queued" && candidate.queueHeld === true,
+            )))
           ? { queueHeld: true }
           : {}),
         queuePosition:
-          Math.max(
-            0,
-            ...projection.runs
-              .filter((candidate) => candidate.status === "queued")
-              .map((candidate) => candidate.queuePosition ?? candidate.ordinal),
-          ) + 1,
+          adoptedNativeTurnId !== undefined
+            ? 1
+            : Math.max(
+                0,
+                ...projection.runs
+                  .filter((candidate) => candidate.status === "queued")
+                  .map((candidate) => candidate.queuePosition ?? candidate.ordinal),
+              ) + 1,
         requestedAt: now,
         startedAt: null,
         completedAt: null,
@@ -5872,6 +5911,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         rootNodeId,
         activeAttemptId: attemptId,
         status: dispatchMode.type === "defer_start" ? "preparing" : "starting",
+        ...(adoptedNativeTurnId === undefined ? {} : { adoptedNativeTurnId }),
         queuePosition: null,
         requestedAt: now,
         startedAt: null,
@@ -9357,7 +9397,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       },
     });
     const scopeId = rootNode.checkpointScopeId;
-    if (scopeId !== null) {
+    if (scopeId !== null && run.adoptedNativeTurnId === undefined) {
       yield* Ref.update(input.effects, (effects) => [
         ...effects,
         {
@@ -11668,6 +11708,157 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
         break;
+      case "voice.failure.record": {
+        const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+        if (projection.thread.deletedAt !== null) break;
+        const id = idAllocator.derive.turnItemFromProviderItem({
+          driver: ProviderDriverKind.make("codex"),
+          nativeItemId: command.messageId,
+        });
+        if (projection.turnItems.some((item) => item.id === id)) break;
+        const now = yield* DateTime.now;
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            id,
+            threadId: command.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: yield* nextTurnItemOrdinal(projection),
+            status: "failed",
+            title: "Voice coding failed",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "error",
+            failure: {
+              class: "provider_error",
+              message: "Voice coding ended before its request could be recorded.",
+              code: null,
+              retryable: null,
+            },
+          },
+        });
+        break;
+      }
+      case "voice.transcript.record": {
+        const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+        if (projection.thread.deletedAt !== null) break;
+        if (projection.messages.some((message) => message.id === command.messageId)) break;
+        const now = yield* DateTime.now;
+        const message: OrchestrationV2ConversationMessage = {
+          id: command.messageId,
+          threadId: command.threadId,
+          runId: null,
+          nodeId: null,
+          role: command.role,
+          text: command.text,
+          attachments: [],
+          streaming: false,
+          voiceTranscript: true,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: command.role === "user" ? "user" : "agent",
+          creationSource: "provider",
+        };
+        const common = {
+          id: idAllocator.derive.turnItemFromProviderItem({
+            driver: ProviderDriverKind.make("codex"),
+            nativeItemId: command.messageId,
+          }),
+          threadId: command.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: yield* nextTurnItemOrdinal(projection),
+          status: "completed" as const,
+          title: "Voice transcript",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          messageId: command.messageId,
+          text: command.text,
+          voiceTranscript: true,
+        };
+        const turnItem: OrchestrationV2TurnItem =
+          command.role === "user"
+            ? {
+                ...common,
+                type: "user_message",
+                createdBy: "user",
+                creationSource: "provider",
+                inputIntent: "turn_start",
+                attachments: [],
+              }
+            : { ...common, type: "assistant_message", streaming: false };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "message.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: message,
+        });
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: turnItem,
+        });
+        break;
+      }
+      case "voice.handoff": {
+        const projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+        const providerThread = projection.providerThreads.find(
+          (thread) => thread.id === command.providerThreadId,
+        );
+        if (
+          !modelSelectionsEqual(projection.thread.modelSelection, command.modelSelection) ||
+          projection.thread.runtimeMode !== command.runtimeMode ||
+          projection.thread.interactionMode !== command.interactionMode ||
+          providerThread?.driver !== "codex" ||
+          projection.thread.activeProviderThreadId !== providerThread.id
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The voice handoff no longer belongs to the active Codex thread.",
+          });
+        }
+        yield* dispatchMessage(
+          {
+            type: "message.dispatch",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            messageId: command.messageId,
+            text: command.text,
+            attachments: [],
+            createdBy: "user",
+            creationSource: "provider",
+            dispatchMode: { type: "start_immediately" },
+          },
+          events,
+          effects,
+          command.nativeTurnId,
+        );
+        break;
+      }
       case "message.dispatch": {
         // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
         const thread = yield* projectionStore

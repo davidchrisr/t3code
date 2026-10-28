@@ -7,6 +7,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   idleCompactionPatch,
@@ -26,6 +27,23 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const encodeCodexSettings = Schema.encodeSync(CodexSettings);
+
+describe("Codex voice settings", () => {
+  const decode = Schema.decodeUnknownSync(CodexSettings);
+
+  it("preserves older configs and round-trips a selected voice", () => {
+    expect(decode({}).voice).toBeUndefined();
+    const selected = decode({ voice: "maple" });
+    expect(selected.voice).toBe("maple");
+    expect(decode(encodeCodexSettings(selected)).voice).toBe("maple");
+    expect(decode({ voice: "" }).voice).toBe("");
+  });
+
+  it("rejects an unsupported voice instead of silently using another", () => {
+    expect(() => decode({ voice: "unknown-voice" })).toThrow();
+  });
+});
 
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {

@@ -591,6 +591,7 @@ export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
 export const OrchestrationV2Run = Schema.Struct({
+  adoptedNativeTurnId: Schema.optional(TrimmedNonEmptyString),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
@@ -1153,6 +1154,7 @@ export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpire
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  voiceTranscript: Schema.optional(Schema.Boolean),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -1409,6 +1411,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     ...OrchestrationV2CreationFields,
     type: Schema.Literal("user_message"),
+    voiceTranscript: Schema.optional(Schema.Boolean),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
@@ -1424,6 +1427,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
+    voiceTranscript: Schema.optional(Schema.Boolean),
     messageId: MessageId,
     text: Schema.String,
     textOmitted: DedupedBodyMarker,
@@ -2213,6 +2217,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     ...OrchestrationV2CreationFields,
     type: Schema.Literal("user_message"),
+    voiceTranscript: Schema.optional(Schema.Boolean),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
@@ -2226,6 +2231,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
+    voiceTranscript: Schema.optional(Schema.Boolean),
     messageId: MessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
@@ -3142,6 +3148,32 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("voice.handoff"),
+    modelSelection: ModelSelection,
+    runtimeMode: RuntimeMode,
+    interactionMode: ProviderInteractionMode,
+    commandId: CommandId,
+    threadId: ThreadId,
+    providerThreadId: ProviderThreadId,
+    nativeTurnId: TrimmedNonEmptyString,
+    messageId: MessageId,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("voice.failure.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    messageId: MessageId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("voice.transcript.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    messageId: MessageId,
+    role: Schema.Literals(["user", "assistant"]),
+    text: Schema.String,
+  }),
   // Guest share commands the server issues after checking T3 Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),
