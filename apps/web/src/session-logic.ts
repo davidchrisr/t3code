@@ -626,6 +626,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
     }
     if (item.type === "user_message" || item.type === "assistant_message") {
       const message: ChatMessage = {
+        ...(item.voiceTranscript ? { voiceTranscript: true } : {}),
         id: item.messageId,
         role: item.type === "user_message" ? "user" : "assistant",
         text: item.text,

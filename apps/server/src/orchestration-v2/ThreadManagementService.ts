@@ -666,13 +666,17 @@ const make = Effect.gen(function* () {
 
   const assertDispatchTargetEnabled = (command: OrchestrationV2ServerCommand) => {
     switch (command.type) {
+      case "voice.handoff":
       case "message.dispatch":
         return orchestrator.getThreadRecords(command.threadId, []).pipe(
           Effect.flatMap((projection) =>
             assertProviderInstanceEnabled({
               projectId: projection.thread.projectId,
               commandId: command.commandId,
-              instanceId: (command.modelSelection ?? projection.thread.modelSelection).instanceId,
+              instanceId: (
+                (command.type === "message.dispatch" ? command.modelSelection : undefined) ??
+                projection.thread.modelSelection
+              ).instanceId,
             }),
           ),
         );

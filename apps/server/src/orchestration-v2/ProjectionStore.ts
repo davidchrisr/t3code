@@ -5277,8 +5277,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE thread_id = ${threadId} AND status = 'queued')
             AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs
               WHERE thread_id = ${threadId}
-                AND (status IN ('preparing', 'starting', 'running', 'waiting')
-                  OR (status = 'queued' AND json_extract(payload_json, '$.queueHeld') = 1)))`;
+                AND status IN ('preparing', 'starting', 'running', 'waiting'))
+            AND (NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs
+                WHERE thread_id = ${threadId} AND status = 'queued' AND json_extract(payload_json, '$.queueHeld') = 1)
+              OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs
+                WHERE thread_id = ${threadId} AND status = 'queued'
+                  AND json_extract(payload_json, '$.adoptedNativeTurnId') IS NOT NULL))`;
             return rows.length > 0;
           }),
         )
@@ -7513,9 +7517,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               run.status === "preparing" ||
               run.status === "starting" ||
               run.status === "running" ||
-              run.status === "waiting" ||
-              (run.status === "queued" && run.queueHeld === true),
-          )
+              run.status === "waiting",
+          ) &&
+          (!projection.runs.some((run) => run.status === "queued" && run.queueHeld === true) ||
+            projection.runs.some(
+              (run) => run.status === "queued" && run.adoptedNativeTurnId !== undefined,
+            ))
         );
       }),
       getThreadProjection: Effect.fn("ProjectionStore.getThreadProjection")(function* (threadId) {

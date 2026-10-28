@@ -137,6 +137,57 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
   }
 }
 
+export const ProviderVoiceSessionInput = Schema.Struct({
+  threadId: ThreadId,
+  offerSdp: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(64 * 1024)),
+});
+export type ProviderVoiceSessionInput = typeof ProviderVoiceSessionInput.Type;
+
+export const ProviderVoiceSessionEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("answer"), sdp: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("started") }),
+  Schema.Struct({
+    type: Schema.Literal("speech.failed"),
+    reason: Schema.Literals(["too-long", "provider"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("transcript.delta"),
+    role: Schema.Literals(["user", "assistant"]),
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("transcript.done"),
+    role: Schema.Literals(["user", "assistant"]),
+    text: Schema.String,
+  }),
+  Schema.Struct({ type: Schema.Literal("closed") }),
+]);
+export type ProviderVoiceSessionEvent = typeof ProviderVoiceSessionEvent.Type;
+
+export class ProviderVoiceSessionError extends Schema.TaggedError<ProviderVoiceSessionError>()(
+  "ProviderVoiceSessionError",
+  {
+    threadId: ThreadId,
+    reason: Schema.Literals(["unavailable", "unsupported", "busy", "provider", "persistence"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "unavailable":
+        return "Send a message in a Codex thread before starting voice.";
+      case "unsupported":
+        return "This provider does not support voice conversations.";
+      case "busy":
+        return "A voice conversation is already active in this provider session.";
+      case "persistence":
+        return "Could not save the voice conversation.";
+      case "provider":
+        return "The provider could not continue the voice conversation.";
+    }
+  }
+}
+
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({

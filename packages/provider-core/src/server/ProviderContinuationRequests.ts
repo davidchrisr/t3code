@@ -1,6 +1,9 @@
 import {
   type OrchestrationV2Notification,
   MessageId,
+  type ModelSelection,
+  type RuntimeMode,
+  type ProviderInteractionMode,
   ProviderDriverKind,
   ProviderThreadId,
   RunId,
@@ -26,6 +29,17 @@ export interface ProviderContinuationRequest {
   /** adapter_buffered (default) ingests existing CLI output; message_text delivers app-owned wake text. */
   readonly delivery?: "adapter_buffered" | "message_text";
   readonly messageId?: MessageId;
+  readonly onVoiceFailure?: Effect.Effect<void>;
+  readonly voice?:
+    | {
+        readonly type: "handoff";
+        readonly nativeTurnId: string;
+        readonly modelSelection: ModelSelection;
+        readonly runtimeMode: RuntimeMode;
+        readonly interactionMode: ProviderInteractionMode;
+      }
+    | { readonly type: "failure" }
+    | { readonly type: "transcript"; readonly role: "user" | "assistant" };
   readonly dispatchIfCurrent?: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<Option.Option<A>, E, R>;

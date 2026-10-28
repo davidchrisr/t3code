@@ -99,6 +99,29 @@ when it resets, when Codex reports them. Send the message again after the reset.
 message also says whether your workspace owner needs to add credits or raise the
 spend limit to continue sooner.
 
+## Talk with Codex
+
+After sending a message in a Codex thread, choose **Start voice** to talk through
+the work. Start, stop, and mute are also available in the command palette. Voice
+is experimental and requires a Codex build and account with voice access.
+
+Choose a voice in **Settings → Providers → your Codex instance → Voice**. The
+selection applies to the next voice session. Choose **Codex default** to use
+Codex's configured voice.
+
+Voice works in the web app, including mobile browsers, and macOS desktop. Allow
+microphone access when prompted. Remote web connections need HTTPS, and the
+device must be able to reach OpenAI directly for audio.
+
+Finalized voice transcripts are saved in the thread. Saving a transcript does
+not submit another coding request. Coding requests from the voice conversation
+use the thread's existing Codex session and permission mode. Stop voice or leave
+the thread to release the microphone. Changing the model or permission mode ends
+voice; start it again to use the new settings.
+
+Coding turns started by voice do not create restore checkpoints. Their messages
+and results remain in the thread, but per-turn file restore is unavailable.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` with an optional description, for

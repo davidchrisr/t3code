@@ -79,6 +79,118 @@ const layerRunExecutionTest = RunExecutionService.layer.pipe(
   ),
 );
 
+it.effect.each(["completed", "interrupted", "cancelled", "failed"] as const)(
+  "finishes a %s native voice run without restore checkpoints",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("voice-no-checkpoint");
+        const runId = RunId.make("voice-no-checkpoint-run");
+        const providerThreadId = ProviderThreadId.make("voice-no-checkpoint-provider");
+        const providerTurnId = ProviderTurnId.make("voice-no-checkpoint-turn");
+        const attemptId = RunAttemptId.make("voice-no-checkpoint-attempt");
+        const done = yield* Deferred.make<void>();
+        const writes: Array<Parameters<EventSink.EventSinkV2["Service"]["writeWithEffects"]>[0]> =
+          [];
+        let baselines = 0;
+        const testLayer = RunExecutionService.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              PreviewAgentActivity.layer,
+              McpAppModelContext.layerEmpty,
+              layerTurnItemPositionsTest,
+              IdAllocator.layer,
+              ServerSettings.layerTest(),
+              Layer.mock(CheckpointService.CheckpointServiceV2)({
+                captureBaseline: () =>
+                  Effect.sync(() => {
+                    baselines++;
+                  }),
+              }),
+              Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+                ingestNormalized: () => Effect.succeed([]),
+              }),
+              Layer.mock(EventSink.EventSinkV2)({
+                writeWithEffects: (input) =>
+                  Effect.sync(() => {
+                    writes.push(input);
+                  }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.as([])),
+              }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* RunExecutionService.RunExecutionServiceV2;
+          yield* service.startRootRun({
+            commandId: CommandId.make("voice-no-checkpoint-start"),
+            appThread: rootAppThread(threadId),
+            providerSessionId: ProviderSessionId.make("voice-no-checkpoint-session"),
+            session: {
+              events: Stream.make({
+                type: "turn.terminal",
+                driver,
+                providerThreadId,
+                providerTurnId,
+                runOrdinal: 1,
+                status,
+                failure: null,
+                threadDisposition: "reusable",
+              }),
+              startTurn: () => Effect.void,
+            } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
+            run: {
+              id: runId,
+              threadId,
+              ordinal: 1,
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              adoptedNativeTurnId: "native-voice",
+              status: "running",
+            } as OrchestrationV2Run,
+            rootNode: {
+              id: NodeId.make("voice-no-checkpoint-node"),
+              status: "running",
+            } as OrchestrationV2ExecutionNode,
+            checkpointScope: {
+              id: CheckpointScopeId.make("voice-no-checkpoint-scope"),
+            } as OrchestrationV2CheckpointScope,
+            providerThread: { id: providerThreadId, driver } as OrchestrationV2ProviderThread,
+            attempt: {
+              id: attemptId,
+              providerTurnId,
+              status: "running",
+            } as OrchestrationV2RunAttempt,
+            attemptId,
+            providerTurnOrdinal: 1,
+            message: {
+              messageId: MessageId.make("voice-no-checkpoint-message"),
+              text: "work",
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+            },
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            runtimePolicy: {
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              cwd: "/workspace",
+            },
+          });
+          yield* Deferred.await(done);
+          assert.equal(baselines, 0);
+          assert.deepEqual(
+            writes.flatMap((write) => write.effects),
+            [],
+          );
+          const run = writes
+            .flatMap((write) => write.events)
+            .find((event) => event.type === "run.updated");
+          assert.equal(run?.type === "run.updated" && run.payload.status, status);
+          assert.isNotNull(run?.type === "run.updated" ? run.payload.completedAt : null);
+        }).pipe(Effect.provide(testLayer));
+      }),
+    ),
+);
+
 it.effect("routes shared-runtime events only to their owning root run", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -1033,6 +1145,12 @@ it.effect(
         { text: " /compact ", attachments: [], expected: "compact" },
         { text: "/compact", attachments: [attachment], expected: "prompt" },
         { text: "Continue the work", attachments: [], expected: "prompt" },
+        {
+          text: "/compact",
+          attachments: [],
+          adoptedNativeTurnId: "native-voice-command",
+          expected: "adopt",
+        },
       ];
       for (const [index, testCase] of cases.entries()) {
         const threadId = ThreadId.make(`thread:compact-routing:${index}`);
@@ -1043,9 +1161,9 @@ it.effect(
           providerSessionId: ProviderSessionId.make(`session:compact-routing:${index}`),
           session: {
             events: Stream.never,
-            startTurn: () =>
+            startTurn: (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) =>
               Effect.sync(() => {
-                calls.push("prompt");
+                calls.push(turnInput.adoptedNativeTurnId === undefined ? "prompt" : "adopt");
               }),
             compactThread: () =>
               Effect.sync(() => {
@@ -1054,6 +1172,9 @@ it.effect(
           } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
           run: {
             id: RunId.make(`run:compact-routing:${index}`),
+            ...("adoptedNativeTurnId" in testCase
+              ? { adoptedNativeTurnId: testCase.adoptedNativeTurnId }
+              : {}),
             threadId,
             ordinal: 1,
             providerInstanceId: ProviderInstanceId.make("codex"),

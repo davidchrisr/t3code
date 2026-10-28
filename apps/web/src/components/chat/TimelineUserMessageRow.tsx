@@ -486,6 +486,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               folded && !ctx.findActive && "max-h-96 overflow-auto",
             )}
           >
+            {row.message.voiceTranscript ? (
+              <p className="mb-1 text-xs text-muted-foreground">Voice transcript</p>
+            ) : null}
             {(regularImages.length > 0 || userVideos.length > 0) && (
               <div className="mb-2 grid max-w-[210px] grid-cols-2 gap-2">
                 {regularImages.map((image) => (

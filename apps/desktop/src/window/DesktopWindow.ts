@@ -12,6 +12,7 @@ import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/con
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { installMainWindowPermissions } from "./MainWindowPermissions.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
@@ -400,6 +401,7 @@ export const make = Effect.gen(function* () {
     }
 
     yield* rendererHistory.register(window.webContents, { surface: "main" });
+    installMainWindowPermissions(window.webContents, applicationUrl, environment.platform);
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
     }

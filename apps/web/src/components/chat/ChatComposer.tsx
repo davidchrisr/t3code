@@ -1,6 +1,7 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { ComposerKeyboardBar, isComposerKeyboardFocusTarget } from "./ComposerKeyboardBar";
 import type { ComposerKeyboardAction } from "~/composer-keyboard";
+import { VoiceControls } from "./VoiceControls";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -539,7 +540,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
     promptHistoryMessages,
-    isServerThread: _isServerThread,
+    isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
@@ -3418,6 +3419,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null}
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
+          {selectedProvider === "codex" && activeThreadId !== null && isServerThread ? (
+            <VoiceControls
+              environmentId={environmentId}
+              threadId={activeThreadId}
+              keybindings={keybindings}
+              disabled={
+                !canOperateThread || props.activeThreadShell?.activeProviderThreadId == null
+              }
+            />
+          ) : null}
           <ComposerBannerStack items={shelfItems} />
           {showComposerTopDrawer ? (
             <ComposerBanner.Attachment>

@@ -484,7 +484,11 @@ export const layer: Layer.Layer<
           });
         },
       );
-      if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
+      if (
+        run.adoptedNativeTurnId === undefined &&
+        message.attachments.length === 0 &&
+        message.text.trimStart().startsWith("/")
+      ) {
         const isEmptyCompaction =
           message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
         // Preparation may select a new provider; account commands still target the last native session.
@@ -709,24 +713,38 @@ export const layer: Layer.Layer<
         if (!repaired.committed) return;
       }
       const sessionResult = yield* Effect.result(
-        providerSessions.open({
-          threadId: projection.thread.id,
-          providerSessionId,
-          modelSelection: run.modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSessionProjection === undefined
-            ? {}
-            : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
-              }),
-        }),
+        run.adoptedNativeTurnId !== undefined
+          ? providerSessions.get(providerSessionId).pipe(
+              Effect.flatMap((runtime) =>
+                Effect.fromOption(runtime).pipe(
+                  Effect.mapError(
+                    () =>
+                      new ProviderTurnStartError({
+                        runId,
+                        cause: "The voice provider session has ended.",
+                      }),
+                  ),
+                ),
+              ),
+            )
+          : providerSessions.open({
+              threadId: projection.thread.id,
+              providerSessionId,
+              modelSelection: run.modelSelection,
+              runtimePolicy: resolvedRuntimePolicy,
+              ...(existingSessionProjection === undefined
+                ? {}
+                : { resumeFromSession: existingSessionProjection }),
+              ...(providerThread.nativeThreadRef?.nativeId == null
+                ? {}
+                : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+              ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+                ? {}
+                : {
+                    initialProviderItemIdentityVersion:
+                      providerThread.nativeMetadata.itemIdentityVersion,
+                  }),
+            }),
       );
       if (sessionResult._tag === "Failure") {
         if (input.willRetry === true) return yield* sessionResult.failure;
@@ -755,6 +773,7 @@ export const layer: Layer.Layer<
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
       const loadedProviderThread = yield* Effect.gen(function* () {
+        if (run.adoptedNativeTurnId !== undefined) return providerThread;
         if (nativeForkTransfer !== undefined) {
           const sourceProjection = yield* projectionStore.getThreadRecords(
             nativeForkTransfer.sourceThreadId,
@@ -1360,10 +1379,11 @@ export const layer: Layer.Layer<
         ),
       );
       const deliverySession =
-        effectiveHandoffs.length === 0 &&
-        missedItems.length === 0 &&
-        restartNote === "" &&
-        !noteContinuation
+        run.adoptedNativeTurnId !== undefined ||
+        (effectiveHandoffs.length === 0 &&
+          missedItems.length === 0 &&
+          restartNote === "" &&
+          !noteContinuation)
           ? session
           : makeDeliverySession(session, startWithHandoffs);
       return runExecution.startRootRun({

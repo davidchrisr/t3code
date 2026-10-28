@@ -127,6 +127,8 @@ export function handoffBudget(input: {
 export function historicalMessage(
   item: OrchestrationV2TurnItem,
 ): OrchestrationV2HistoricalMessage | null {
+  if ((item.type === "user_message" || item.type === "assistant_message") && item.voiceTranscript)
+    return null;
   let text: string;
   switch (item.type) {
     case "user_message":

@@ -15,6 +15,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderSessionId,
+  type ProviderVoiceSessionEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -50,10 +51,109 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const layerTestDatabase = SqlitePersistence.layerMemory;
+
+it.effect.each([
+  "detach",
+  "release",
+  "provider-loss",
+  "pending-detach",
+  "pending-release",
+  "pending-settings",
+] as const)("ends voice on %s without a realtime closed event", (scenario) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const started = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      const acquiring = yield* Deferred.make<void>();
+      const pending = scenario.startsWith("pending-");
+      const voice = Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+        Stream.flatMap(() => Stream.never),
+        Stream.ensuring(Deferred.succeed(stopped, undefined)),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("voice-owner");
+        const sibling = ThreadId.make("voice-sibling");
+        const providerSessionId = ids.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* sink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now }),
+            yield* makeThreadCreatedEvent({ idAllocator: ids, threadId: sibling, now }),
+            {
+              id: yield* ids.allocate.event({ threadId }),
+              type: "provider-thread.updated",
+              threadId,
+              occurredAt: now,
+              payload: makeProviderThread({ idAllocator: ids, threadId, providerSessionId, now }),
+            },
+          ],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        yield* manager.open({
+          threadId: sibling,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const fiber = yield* manager
+          .startVoiceSession({ threadId, offerSdp: "offer" })
+          .pipe(Stream.runDrain, Effect.forkScoped);
+        yield* Effect.raceFirst(
+          Deferred.await(pending ? acquiring : started),
+          Fiber.join(fiber).pipe(Effect.andThen(Effect.die("Voice ended before startup"))),
+        );
+        if (scenario.endsWith("detach")) yield* manager.detach({ providerSessionId, threadId });
+        else if (scenario.endsWith("release"))
+          yield* manager.release({ providerSessionId, reason: "runtime_error" });
+        else if (scenario === "pending-settings") {
+          const projections = yield* ProjectionStore.ProjectionStoreV2;
+          const thread = yield* projections.getThread(threadId);
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "thread.runtime-mode-updated",
+                threadId,
+                occurredAt: now,
+                payload: { ...thread, runtimeMode: "approval-required" },
+              },
+            ],
+          });
+        } else
+          yield* Queue.end((yield* Ref.get(state)).eventQueues.get(String(providerSessionId))!);
+        yield* Deferred.await(stopped);
+        yield* Fiber.join(fiber);
+        if (scenario.endsWith("detach"))
+          assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            voice,
+            beforeResume: pending
+              ? Deferred.succeed(acquiring, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(Deferred.succeed(stopped, undefined)),
+                )
+              : Effect.void,
+          }),
+        ),
+      );
+    }),
+  ),
+);
 const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pipe(
   Layer.provide(layerTestDatabase),
 );
@@ -319,6 +419,11 @@ function unimplemented(detail: string) {
 const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
+    readonly beforeResume?: Effect.Effect<void>;
+    readonly voice?: Stream.Stream<
+      ProviderVoiceSessionEvent,
+      ProviderAdapter.ProviderAdapterV2Error
+    >;
     readonly failEventStream?: boolean;
     readonly capabilities?: OrchestrationV2ProviderCapabilities;
     readonly mcpConfigs?: Ref.Ref<
@@ -396,6 +501,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
         }
 
         return {
+          ...(options.voice === undefined ? {} : { startVoiceSession: () => options.voice! }),
           instanceId: ProviderInstanceId.make("codex"),
           driver: CODEX_DRIVER,
           providerSessionId: input.providerSessionId,
@@ -422,10 +528,15 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               }),
           ensureThread: () => unimplemented("ensureThread unused in test"),
           resumeThread: (threadInput) =>
-            Ref.update(state, (current) => ({
-              ...current,
-              resumeCount: current.resumeCount + 1,
-            })).pipe(Effect.as(threadInput.providerThread)),
+            (options.beforeResume ?? Effect.void).pipe(
+              Effect.andThen(
+                Ref.update(state, (current) => ({
+                  ...current,
+                  resumeCount: current.resumeCount + 1,
+                })),
+              ),
+              Effect.as(threadInput.providerThread),
+            ),
           startTurn: () => options.startTurn ?? Effect.void,
           steerTurn: () => Effect.void,
           interruptTurn: () =>
@@ -455,6 +566,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 });
 
 function layerTest(input: {
+  readonly beforeResume?: Effect.Effect<void>;
+  readonly voice?: Stream.Stream<ProviderVoiceSessionEvent, ProviderAdapter.ProviderAdapterV2Error>;
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
   readonly maxIdlePinMs?: number;
@@ -498,6 +611,8 @@ function layerTest(input: {
             : layerTestEventSink;
   const layerRegistry = Layer.unwrap(
     makeProviderAdapter(input.state, {
+      ...(input.beforeResume === undefined ? {} : { beforeResume: input.beforeResume }),
+      ...(input.voice === undefined ? {} : { voice: input.voice }),
       failEventStream: input.failEventStream ?? false,
       ...(input.capabilities === undefined ? {} : { capabilities: input.capabilities }),
       ...(input.mcpConfigs === undefined ? {} : { mcpConfigs: input.mcpConfigs }),
@@ -558,6 +673,7 @@ function layerTest(input: {
           layerConfiguredEventSink,
           IdAllocator.layer,
           layerProviderEventIngestorTest,
+          RuntimePolicy.layer,
           layerConfiguredMcpRegistry,
           layerTestStores,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
