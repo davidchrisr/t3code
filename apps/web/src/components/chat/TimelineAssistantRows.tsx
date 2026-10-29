@@ -258,6 +258,10 @@ export function HtmlRenderTimelineRow({
         htmlRender={row.htmlRender}
         threadRef={ctx.threadRef ?? undefined}
         onFullscreenChange={onFullscreenChange}
+        onCite={ctx.onCiteAssistantText}
+        citationRequest={ctx.citationRequest}
+        listRef={ctx.listRef}
+        itemKey={row.id}
       />
     </div>
   );

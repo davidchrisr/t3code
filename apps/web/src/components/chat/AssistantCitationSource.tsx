@@ -7,6 +7,8 @@ import {
 } from "~/lib/assistantTextSelection";
 import { toastManager } from "../ui/toast";
 import { observeResize } from "~/lib/observeResize";
+import { revealCitationRange } from "~/lib/citationRangeScroll";
+import { isSelectionRectVisible } from "~/lib/selectionActions";
 
 const CITATION_PULSE_DURATION_MS = 650;
 const CITATION_HIGHLIGHT_HOLD_MS = 1575;
@@ -56,11 +58,15 @@ export function observeAssistantCitationCommentSource({
       return false;
     }
     if (
-      sourceChanged ||
+      (sourceChanged && citation.version === 1) ||
       range.collapsed ||
       !source.contains(range.startContainer) ||
       !source.contains(range.endContainer)
     ) {
+      if (citation.version === 2) {
+        unavailable();
+        return false;
+      }
       const repaired = resolveAssistantCitationRange(source, citation);
       if (!repaired) {
         unavailable();
@@ -73,7 +79,7 @@ export function observeAssistantCitationCommentSource({
   };
 
   if (!validate(false)) return dispose;
-  if (typeof Highlight !== "undefined" && registry) {
+  if (citation.version === 1 && typeof Highlight !== "undefined" && registry) {
     const existing = registry.get(COMMENT_HIGHLIGHT_NAME);
     highlight = existing ?? new Highlight();
     highlight.add(range);
@@ -93,6 +99,7 @@ export interface AssistantCitationTarget extends AssistantCitationRequest {
   activationRef: RefObject<{
     scrolled: boolean;
     dismissed: boolean;
+    htmlRenderDeadline?: number;
     cancelScroll?: () => void;
     pulse?: { startedAt: number; reducedMotion: boolean };
   }>;
@@ -164,7 +171,22 @@ export function observeAssistantCitationSource({
     const index = state.indexByKey(itemKey);
     if (index === undefined || !(state.sizeAtIndex(index) > 0)) return;
     const range = resolveAssistantCitationRange(root, request.citation);
-    const rect = (range ?? root).getBoundingClientRect();
+    const rect = range
+      ? revealCitationRange(range, scrollNode, !activation.scrolled)
+      : root.getBoundingClientRect();
+    if (!rect) {
+      if (!activation.scrolled) {
+        activation.dismissed = true;
+        request.onComplete();
+        toastManager.add({
+          type: "warning",
+          title: "The cited text could not be revealed",
+          description: "Your saved quote is unchanged.",
+        });
+      }
+      clear();
+      return;
+    }
     if (rect.height <= 0 || scrollNode.clientHeight <= 0) {
       clear();
       return;
@@ -201,7 +223,7 @@ export function observeAssistantCitationSource({
         );
         return;
       }
-      if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) return;
+      if (!isSelectionRectVisible(rect, [scrollRect])) return;
       activation.scrolled = true;
       request.onComplete();
       if (!range) {
@@ -351,7 +373,14 @@ export function AssistantCitationSource({
   useEffect(() => {
     const root = rootRef.current;
     const list = listRef.current;
-    if (!root || !list || !request || request.citation.messageId !== messageId) return;
+    if (
+      !root ||
+      !list ||
+      !request ||
+      request.citation.version !== 1 ||
+      request.citation.messageId !== messageId
+    )
+      return;
     return observeAssistantCitationSource({ root, itemKey, request, list });
   }, [itemKey, listRef, messageId, request]);
 

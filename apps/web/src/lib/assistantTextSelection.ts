@@ -20,6 +20,7 @@ export function findAssistantCitationSourceAnchor(
   document: Document,
   citation: AssistantCitation,
 ): AssistantCitationSourceAnchor | null {
+  if (citation.version === 2) return null;
   const source = [
     ...document.querySelectorAll<HTMLElement>("[data-assistant-citation-source]"),
   ].find(

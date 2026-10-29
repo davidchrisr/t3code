@@ -904,6 +904,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [timelineViewportElement, rows.length, reportContentOverflow, chatWidth]);
 
   const sharedState: TimelineRowSharedState = {
+    onCiteAssistantText,
     citationRequest: readyCitationRequest,
     listRef,
     timestampFormat,

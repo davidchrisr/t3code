@@ -5,6 +5,7 @@ import {
   type ThemeColors,
 } from "./themePalettes.ts";
 import { EVENT_CODE_SHORTCUT_KEYS } from "./keybindings.ts";
+import { HTML_RENDER_CITATION_SCRIPT } from "./htmlRenderCitations.ts";
 
 export const HTML_RENDER_TOOL_NAME = "html_render";
 export const HTML_RENDER_MIN_HEIGHT = 80;
@@ -13,6 +14,7 @@ export const HTML_RENDER_MAX_HEIGHT = 2000;
 // page that grows with its frame, since vh units are rejected at publish.
 export const HTML_RENDER_MAX_FIT_HEIGHT = 20_000;
 export const HTML_RENDER_MAX_TITLE_LENGTH = 200;
+export const HTML_RENDER_MAX_PAGE_BYTES = 25 * 1024 * 1024;
 
 export interface HtmlRenderReference {
   readonly attachmentId: string;
@@ -435,4 +437,11 @@ export function injectHtmlRenderBootstrap(html: string): string {
     return `${html.slice(0, at)}<head>${markup}</head>${html.slice(at)}`;
   }
   return `<!doctype html><head>${markup}</head>${html}`;
+}
+
+export function injectHtmlRenderCitationBootstrap(html: string): string {
+  const scan = blankNonMarkup(html);
+  const head = /<head(?:\s[^>]*)?>/i.exec(scan);
+  const at = head ? head.index + head[0].length : 0;
+  return `${html.slice(0, at)}<script>${HTML_RENDER_CITATION_SCRIPT}</script>${html.slice(at)}`;
 }

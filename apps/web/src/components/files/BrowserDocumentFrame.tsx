@@ -32,6 +32,10 @@ import { shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
+import {
+  HtmlRenderCitationControls,
+  type HtmlRenderCitationContext,
+} from "../chat/HtmlRenderCitationControls";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
 /**
@@ -118,11 +122,13 @@ export function HtmlRenderDocument(props: {
   readonly onContentHeight?: (height: number) => void;
   /** Reports fullscreen changes so virtualized rows can stay mounted. */
   readonly onFullscreenChange?: ((fullscreen: boolean) => void) | undefined;
+  readonly citation?: HtmlRenderCitationContext | undefined;
 }) {
   const theme = useHtmlRenderTheme();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [src] = useState(() => `${props.src.split("#", 1)[0]}${htmlRenderThemeFragment(theme)}`);
-  const [loaded, setLoaded] = useState(false);
+  const [loadGeneration, setLoadGeneration] = useState(0);
+  const loaded = loadGeneration > 0;
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const postTheme = () => {
     frameRef.current?.contentWindow?.postMessage(htmlRenderThemeMessage(theme), "*");
@@ -289,7 +295,7 @@ export function HtmlRenderDocument(props: {
         sandbox="allow-scripts allow-forms"
         loading="lazy"
         onLoad={() => {
-          setLoaded(true);
+          setLoadGeneration((generation) => generation + 1);
           // Covers a theme change that landed while the page was loading.
           postTheme();
           postShortcuts();
@@ -298,6 +304,16 @@ export function HtmlRenderDocument(props: {
         className={cn("border-0 scheme-light", props.className)}
         style={loaded ? { colorScheme: theme.appearance } : undefined}
       />
+      {props.citation && props.threadRef ? (
+        <HtmlRenderCitationControls
+          key={loadGeneration}
+          frameRef={frameRef}
+          loaded={loaded}
+          title={props.title}
+          threadRef={props.threadRef}
+          context={props.citation}
+        />
+      ) : null}
       {expandedImage !== null ? (
         <ExpandedImageDialog preview={expandedImage} onClose={() => setExpandedImage(null)} />
       ) : null}

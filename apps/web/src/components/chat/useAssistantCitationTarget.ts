@@ -1,10 +1,20 @@
 import type { LegendListRef } from "@legendapp/list/react";
-import type { RunId } from "@t3tools/contracts";
+import type { AssistantCitation, RunId } from "@t3tools/contracts";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { TimelineEntry } from "../../session-logic";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
 import type { AssistantCitationRequest, AssistantCitationTarget } from "./AssistantCitationSource";
 import { toastManager } from "../ui/toast";
+
+function isAssistantCitationEntry(
+  entry: TimelineEntry | MessagesTimelineRow,
+  citation: AssistantCitation,
+) {
+  return citation.version === 2
+    ? entry.kind === "html-render" &&
+        entry.htmlRender.attachmentId === citation.htmlRender.attachmentId
+    : entry.kind === "message" && entry.message.id === citation.messageId;
+}
 
 export interface CitationHistoryPage {
   readonly loading: boolean;
@@ -88,9 +98,9 @@ export function useAssistantCitationTarget({
       setFinishedKey(navigation.target.key);
       toastManager.add({ type: "warning", title, description });
     };
-    const source = entries.find(
-      (entry) =>
-        entry.kind === "message" && entry.message.id === navigation.target.citation.messageId,
+    const sourceName = navigation.target.citation.version === 2 ? "visualization" : "response";
+    const source = entries.find((entry) =>
+      isAssistantCitationEntry(entry, navigation.target.citation),
     );
     if (!source) {
       if (loadEarlier) {
@@ -98,7 +108,7 @@ export function useAssistantCitationTarget({
         const cursor = loadEarlier.cursor ?? entries[0]?.id ?? "first";
         if (navigation.requestedPages.has(cursor) || navigation.requestedPages.size >= 20) {
           fail(
-            "Could not load the cited response",
+            `Could not load the cited ${sourceName}`,
             "Load earlier turns, then click the citation to try again. Your saved quote is unchanged.",
           );
           return;
@@ -108,20 +118,20 @@ export function useAssistantCitationTarget({
         return;
       }
       fail(
-        "The cited response is unavailable",
+        `The cited ${sourceName} is unavailable`,
         "It may have been removed. The selected text is still saved in your citation.",
       );
       return;
     }
-    if (source.kind !== "message" || source.message.role !== "assistant") {
+    if (source.kind === "message" && source.message.role !== "assistant") {
       fail(
         "The citation does not refer to an assistant response",
         "The selected text is still saved in your citation.",
       );
       return;
     }
-    const index = rows.findIndex(
-      (row) => row.kind === "message" && row.message.id === navigation.target.citation.messageId,
+    const index = rows.findIndex((row) =>
+      isAssistantCitationEntry(row, navigation.target.citation),
     );
     if (index < 0) {
       const foldRunId = getTurnFoldRunId(source.id);
@@ -187,7 +197,7 @@ export function useAssistantCitationTarget({
   const positioning = request !== null && finishedKey !== request.key;
   const sourceRow =
     target && positioning
-      ? rows.find((row) => row.kind === "message" && row.message.id === target.citation.messageId)
+      ? rows.find((row) => isAssistantCitationEntry(row, target.citation))
       : undefined;
   return {
     target,

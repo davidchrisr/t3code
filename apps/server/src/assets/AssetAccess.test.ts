@@ -764,7 +764,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("signs MCP render intent only for inline HTML attachments", () =>
+  it.effect("signs render intent only for inline HTML attachments", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fs = yield* FileSystem.FileSystem;
@@ -776,31 +776,33 @@ describe("AssetAccess", () => {
           path.join(config.attachmentsDir, `${attachmentId}.${extension}`),
           "capture",
         );
-        for (const disposition of ["inline", "attachment"] as const) {
-          const result = yield* issueAssetUrl({
-            resource: {
-              _tag: "attachment",
-              attachmentId,
-              disposition,
-              renderIntent: "mcp-app",
-            },
-          });
-          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-          const separator = suffix.indexOf("/");
-          const asset = yield* resolveAsset(
-            suffix.slice(0, separator),
-            suffix.slice(separator + 1),
-          );
-          if (asset?.kind !== "file") throw new Error("Expected attachment file");
-          expect("renderIntent" in asset ? asset.renderIntent : undefined).toBe(
-            extension === "html" && disposition === "inline" ? "mcp-app" : undefined,
-          );
-          const token = suffix.slice(0, separator);
-          const [payload, signature] = token.split(".");
-          const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
-          claims.renderIntent = claims.renderIntent ? undefined : "mcp-app";
-          const tampered = `${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${signature}`;
-          expect(yield* resolveAsset(tampered, suffix.slice(separator + 1))).toBeNull();
+        for (const renderIntent of ["mcp-app", "html-render"] as const) {
+          for (const disposition of ["inline", "attachment"] as const) {
+            const result = yield* issueAssetUrl({
+              resource: {
+                _tag: "attachment",
+                attachmentId,
+                disposition,
+                renderIntent,
+              },
+            });
+            const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+            const separator = suffix.indexOf("/");
+            const asset = yield* resolveAsset(
+              suffix.slice(0, separator),
+              suffix.slice(separator + 1),
+            );
+            if (asset?.kind !== "file") throw new Error("Expected attachment file");
+            expect("renderIntent" in asset ? asset.renderIntent : undefined).toBe(
+              extension === "html" && disposition === "inline" ? renderIntent : undefined,
+            );
+            const token = suffix.slice(0, separator);
+            const [payload, signature] = token.split(".");
+            const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
+            claims.renderIntent = claims.renderIntent ? undefined : "mcp-app";
+            const tampered = `${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${signature}`;
+            expect(yield* resolveAsset(tampered, suffix.slice(separator + 1))).toBeNull();
+          }
         }
       }
     }).pipe(Effect.provide(layerTest)),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   injectHtmlRenderBootstrap,
+  injectHtmlRenderCitationBootstrap,
   readHtmlRenderImageRequest,
   readHtmlRenderLinkRequest,
 } from "./htmlRender.ts";
@@ -10,6 +11,19 @@ import { htmlRenderFromToolItem } from "./toolOutput.ts";
 const reference = { attachmentId: "thread-abc-123.html", title: "Chart", height: 420 };
 
 describe("injectHtmlRenderBootstrap", () => {
+  it("adds citation support to existing published pages outside inert content", () => {
+    const html =
+      '<!-- <head> --><html><head><script>const x="<head>";</script></head><body><svg></svg></body></html>';
+    const injected = injectHtmlRenderCitationBootstrap(html);
+    expect(injected.indexOf("window.__t3Citations")).toBeGreaterThan(
+      injected.indexOf("<html><head>"),
+    );
+    expect(injected.indexOf("window.__t3Citations")).toBeLessThan(
+      injected.indexOf('const x="<head>"'),
+    );
+    expect(injected).toContain("<body><svg></svg></body>");
+  });
+
   it("puts the theme ahead of the page's own head content", () => {
     const html =
       "<!doctype html><html><head><style>:root{--background:red}</style></head><body>x</body></html>";
