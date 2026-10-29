@@ -92,6 +92,7 @@ export interface ThreadRightPanelState {
   surfaces: RightPanelSurface[];
   dismissedDeviceSurfaceIds?: string[];
   maximized?: true;
+  restoreHiddenOnUnmaximize?: true;
   proactiveDiffTurnId?: RunId;
 }
 
@@ -306,7 +307,11 @@ const updateThreadStateMap = (
   updater: (current: ThreadRightPanelState) => ThreadRightPanelState,
 ): Record<string, ThreadRightPanelState> => {
   const current = byThreadKey[threadKey] ?? EMPTY_THREAD_STATE;
-  const next = updater(current);
+  let next = updater(current);
+  if (current.surfaces.length > 0 && next.surfaces.length === 0) {
+    const { maximized: _maximized, restoreHiddenOnUnmaximize: _restoreHidden, ...rest } = next;
+    next = rest;
+  }
   if (
     !next.isOpen &&
     next.activeSurfaceId === null &&
@@ -559,6 +564,10 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       }
                     : {}),
                   ...(validThreadState?.maximized === true ? { maximized: true as const } : {}),
+                  ...(validThreadState?.maximized === true &&
+                  validThreadState.restoreHiddenOnUnmaximize === true
+                    ? { restoreHiddenOnUnmaximize: true as const }
+                    : {}),
                 },
               ];
             }),
@@ -1017,13 +1026,25 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           ),
         ),
       setMaximized: (ref, maximized) =>
-        set((state) =>
-          automaticUpdate(state, scopedThreadKey(ref), (current) => {
-            if ((current.maximized ?? false) === maximized) return current;
-            const { maximized: _maximized, ...rest } = current;
-            return maximized ? { ...rest, maximized: true } : rest;
-          }),
-        ),
+        set((state) => {
+          const threadKey = scopedThreadKey(ref);
+          const current = selectThreadRightPanelState(state.byThreadKey, ref);
+          if ((current.maximized ?? false) === maximized && (!maximized || current.isOpen))
+            return state;
+          const { maximized: _maximized, restoreHiddenOnUnmaximize, ...rest } = current;
+          const next = maximized
+            ? {
+                ...rest,
+                isOpen: true,
+                maximized: true as const,
+                ...(!current.isOpen || restoreHiddenOnUnmaximize
+                  ? { restoreHiddenOnUnmaximize: true as const }
+                  : {}),
+              }
+            : { ...rest, isOpen: restoreHiddenOnUnmaximize ? false : current.isOpen };
+          const update = current.isOpen === next.isOpen ? automaticUpdate : userAction;
+          return update(state, threadKey, () => next);
+        }),
       toggleVisibility: (ref) =>
         set((state) =>
           userAction(state, scopedThreadKey(ref), (current) => ({

@@ -992,13 +992,10 @@ export function PullRequestsPage() {
     },
   );
   const rightPanelAvailable = selectedPullRequestSurface !== null;
-  const [maximized, setMaximized] = useState(false);
-  const rightPanelMaximized = rightPanelState.isOpen && maximized;
-  if (!rightPanelState.isOpen && maximized) setMaximized(false);
-  const toggleRightPanelMaximized = () => {
-    if (rightPanelState.isOpen) setMaximized((value) => !value);
+  const rightPanelMaximized = rightPanelState.isOpen && rightPanelState.maximized === true;
+  const onGuideShown = () => {
+    if (rightPanelRef !== null) useRightPanelStore.getState().setMaximized(rightPanelRef, true);
   };
-  const onGuideShown = () => setMaximized(true);
   useEffect(() => {
     if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
@@ -1040,6 +1037,7 @@ export function PullRequestsPage() {
   const toggleRightPanel = () => {
     if (rightPanelRef === null) return;
     if (rightPanelState.isOpen) {
+      useRightPanelStore.getState().setMaximized(rightPanelRef, false);
       useRightPanelStore.getState().close(rightPanelRef);
       updateSearch(clearedSelection);
       return;
@@ -1047,6 +1045,15 @@ export function PullRequestsPage() {
     if (selectedPullRequestSurface === null) return;
     useRightPanelStore.getState().show(rightPanelRef);
     selectSurfaceInUrl(selectedPullRequestSurface);
+  };
+  const toggleRightPanelMaximized = () => {
+    if (rightPanelRef === null || selectedPullRequestSurface === null) return;
+    useRightPanelStore.getState().setMaximized(rightPanelRef, !rightPanelMaximized);
+    const next = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      rightPanelRef,
+    );
+    selectSurfaceInUrl(next.isOpen ? selectedPullRequestSurface : null);
   };
 
   const unavailableProjects = new Map(
@@ -1405,7 +1412,7 @@ export function PullRequestsPage() {
     if (!event.repeat) toggleRightPanel();
   });
   const toggleRightPanelMaximizedFromShortcut = useEffectEvent((event: KeyboardEvent) => {
-    if (!rightPanelState.isOpen) return;
+    if (!rightPanelAvailable) return;
     event.preventDefault();
     event.stopPropagation();
     if (!event.repeat) toggleRightPanelMaximized();

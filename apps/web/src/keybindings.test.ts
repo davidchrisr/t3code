@@ -24,6 +24,47 @@ import {
   type ShortcutEventLike,
 } from "./keybindings";
 
+describe("recent thread and panel shortcuts", () => {
+  it("uses Control+Tab on macOS and Windows, including terminal focus", () => {
+    for (const platform of ["MacIntel", "Win32"]) {
+      assert.equal(
+        resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+          platform,
+          context: { terminalFocus: true, isDesktop: true, isWeb: false },
+        }),
+        "thread.cycleRecent",
+      );
+    }
+    assert.equal(
+      resolveShortcutCommand(event({ key: "Tab", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+      }),
+      null,
+    );
+  });
+
+  it("leaves Control+Tab to the browser outside the desktop client", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "Tab", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: false, isWeb: true },
+      }),
+      null,
+    );
+  });
+
+  it("maximizes a hidden panel with Command+Option+F even when Option changes the key", () => {
+    assert.equal(
+      resolveShortcutCommand(
+        event({ key: "ƒ", code: "KeyF", metaKey: true, altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel", context: { rightPanelOpen: false } },
+      ),
+      "rightPanel.toggleMaximized",
+    );
+  });
+});
+
 function event(overrides: Partial<ShortcutEventLike> = {}): ShortcutEventLike {
   return {
     key: "j",

@@ -45,7 +45,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
+import { MENU_ACTION_CHANNEL, SNAP_SHOT_EVENT_CHANNEL } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -546,6 +546,56 @@ describe("DesktopWindow", () => {
         assert.isFalse(prevented);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect(
+    "commits recent-thread cycling on window modifier release without consuming input",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+          const beforeInput = fakeWindow.webContentsListeners.get("before-input-event");
+          if (!beforeInput) {
+            return yield* Effect.die("before-input-event listener was not registered");
+          }
+
+          fakeWindow.send.mockClear();
+          const preventDefault = vi.fn();
+          const event = { preventDefault };
+          const input = {
+            type: "keyUp",
+            isAutoRepeat: false,
+            meta: false,
+            control: false,
+            alt: false,
+            shift: false,
+          };
+          beforeInput(event, { ...input, type: "keyDown", key: "Control" });
+          beforeInput(event, { ...input, key: "Shift" });
+          beforeInput(event, { ...input, key: "Tab" });
+          assert.equal(fakeWindow.send.mock.calls.length, 0);
+
+          for (const key of ["Control", "Meta", "Alt"]) {
+            beforeInput(event, { ...input, key });
+          }
+          assert.deepEqual(fakeWindow.send.mock.calls, [
+            [MENU_ACTION_CHANNEL, "thread.cycleRecent.end"],
+            [MENU_ACTION_CHANNEL, "thread.cycleRecent.end"],
+            [MENU_ACTION_CHANNEL, "thread.cycleRecent.end"],
+          ]);
+          assert.equal(preventDefault.mock.calls.length, 0);
+
+          vi.mocked(fakeWindow.window.webContents.isDestroyed).mockReturnValue(true);
+          beforeInput(event, { ...input, key: "Control" });
+          assert.equal(fakeWindow.send.mock.calls.length, 3);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   // Chromium hands the main window's zoom level down to embedded preview

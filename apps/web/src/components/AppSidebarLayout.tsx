@@ -40,13 +40,17 @@ import {
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
+import { useRecentThreadShortcuts } from "../hooks/useRecentThreadShortcuts";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarBrandWidthProbe, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
-import { useProjects } from "../state/entities";
+import { useProjects, useQuietThreadShells } from "../state/entities";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { buildThreadRouteParams } from "../threadRoutes";
+import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
   clampThreadSidebarWidth,
   resolveInitialThreadSidebarWidth,
@@ -324,6 +328,32 @@ function ThreadUndoShortcut() {
   return null;
 }
 
+function RecentThreadShortcut() {
+  const threads = useQuietThreadShells();
+  const currentThreadRef = useThreadRouteRef();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const terminalOpen = useTerminalUiStateStore(
+    (state) =>
+      selectThreadTerminalUiState(state.terminalUiStateByThreadKey, currentThreadRef).terminalOpen,
+  );
+  useRecentThreadShortcuts({
+    threads,
+    currentThreadRef,
+    keybindings,
+    terminalOpen,
+    navigateToThread: (ref) => {
+      const selection = useThreadSelectionStore.getState();
+      selection.clearSelection();
+      selection.setAnchor(scopedThreadKey(ref));
+      if (isMobile) setOpenMobile(false);
+      return navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
+    },
+  });
+  return null;
+}
+
 // Settings swaps the thread sidebar out of the tree. Keep the lightweight
 // project projection subscribed so returning to a draft never renders the
 // zero-project state while the environment snapshot reconnects.
@@ -409,6 +439,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <div aria-hidden="true" className="pwa-status-bar-background" />
         <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
         <ProjectProjectionRetention />
+        <RecentThreadShortcut />
         <Sidebar
           side="left"
           collapsible="offcanvas"
