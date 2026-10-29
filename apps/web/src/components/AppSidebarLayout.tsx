@@ -7,7 +7,8 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
+import { useLocation, useNavigate, useRouter, type AnyRouter } from "@tanstack/react-router";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
@@ -38,11 +39,15 @@ import {
 } from "../panelAnimations";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
+import { useRecentThreadShortcuts } from "../hooks/useRecentThreadShortcuts";
+import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 import ThreadSidebar from "./Sidebar";
 import { SidebarBrandWidthProbe } from "./sidebar/SidebarChrome";
 import { isAppModalPage } from "./sidebar/mainAppLocation";
 import type { SidebarRouteReveal } from "./sidebar/routeReveal";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
+import { useQuietThreadShells } from "../state/entities";
+import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
   clampThreadSidebarWidth,
   resolveInitialThreadSidebarWidth,
@@ -65,7 +70,7 @@ import { useVisualViewportVariables } from "../hooks/useVisualViewportVariables"
 import { useMobileSidebarSwipe } from "../hooks/useMobileSidebarSwipe";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { registerCommands, registerMenuAction } from "../shortcuts/dispatcher";
-import { resolveThreadRouteRef } from "../threadRoutes";
+import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 
 const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "var(--desktop-window-controls-inset, 90px)";
 
@@ -377,6 +382,32 @@ function SidebarControl() {
   );
 }
 
+function RecentThreadShortcut() {
+  const threads = useQuietThreadShells();
+  const currentThreadRef = useThreadRouteRef();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const terminalOpen = useTerminalUiStateStore(
+    (state) =>
+      selectThreadTerminalUiState(state.terminalUiStateByThreadKey, currentThreadRef).terminalOpen,
+  );
+  useRecentThreadShortcuts({
+    threads,
+    currentThreadRef,
+    keybindings,
+    terminalOpen,
+    navigateToThread: (ref) => {
+      const selection = useThreadSelectionStore.getState();
+      selection.clearSelection();
+      selection.setAnchor(scopedThreadKey(ref));
+      if (isMobile) setOpenMobile(false);
+      return navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) });
+    },
+  });
+  return null;
+}
+
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const touchViewport = useMediaQuery({ pointer: "coarse" });
   useVisualViewportVariables(touchViewport && !isElectron);
@@ -430,6 +461,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       >
         <div aria-hidden="true" className="pwa-status-bar-background" />
         <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
+        <RecentThreadShortcut />
         <Sidebar
           side="left"
           collapsible="offcanvas"

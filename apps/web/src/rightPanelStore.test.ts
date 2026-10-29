@@ -485,6 +485,58 @@ describe("rightPanelStore", () => {
     expect(store.getUserActionRevision(refA)).toBe(revision);
   });
 
+  it("restores hidden visibility after maximizing a hidden panel", () => {
+    const store = useRightPanelStore.getState();
+    store.openFile(refA, "src/app.ts");
+    store.close(refA);
+    store.setMaximized(refA, true);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA),
+    ).toMatchObject({
+      isOpen: true,
+      maximized: true,
+      activeSurfaceId: "file:src/app.ts",
+    });
+
+    store.setMaximized(refA, false);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA),
+    ).toMatchObject({
+      isOpen: false,
+      activeSurfaceId: "file:src/app.ts",
+    });
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).maximized,
+    ).toBeUndefined();
+  });
+
+  it("keeps a visible panel open after unmaximizing and isolates threads", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.open(refB, "files");
+    store.close(refB);
+    store.setMaximized(refA, true);
+    store.setMaximized(refB, true);
+    store.setMaximized(refA, false);
+    store.setMaximized(refB, false);
+
+    const { byThreadKey } = useRightPanelStore.getState();
+    expect(selectThreadRightPanelState(byThreadKey, refA).isOpen).toBe(true);
+    expect(selectThreadRightPanelState(byThreadKey, refB).isOpen).toBe(false);
+  });
+
+  it("remembers hidden visibility after reloading a maximized panel", async () => {
+    useRightPanelStore.getState().open(refA, "files");
+    useRightPanelStore.getState().close(refA);
+    useRightPanelStore.getState().setMaximized(refA, true);
+    await reloadRightPanelStore();
+    useRightPanelStore.getState().setMaximized(refA, true);
+    useRightPanelStore.getState().setMaximized(refA, false);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+    ).toBe(false);
+  });
+
   it("restores a saved maximized panel during migration", () => {
     const migrated = migratePersistedRightPanelState({
       byThreadKey: {
@@ -497,6 +549,65 @@ describe("rightPanelStore", () => {
       },
     });
     expect(selectThreadRightPanelState(migrated.byThreadKey, refA).maximized).toBe(true);
+  });
+
+  it.each(["device", "proactive"] as const)(
+    "clears maximization when the last tab closes with retained %s metadata",
+    (metadata) => {
+      const store = useRightPanelStore.getState();
+      if (metadata === "device") store.open(refA, "device");
+      else store.openProactive(refA, completedDiff, store.getUserActionRevision(refA));
+      store.close(refA);
+      store.setMaximized(refA, true);
+      store.closeSurface(refA, metadata === "device" ? "device" : "diff");
+
+      const closed = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+      if (metadata === "device") expect(closed.dismissedDeviceSurfaceIds).toEqual(["device"]);
+      else expect(closed.proactiveDiffTurnId).toBe(completedDiff.turnId);
+      expect(closed.maximized).toBeUndefined();
+      expect(closed.restoreHiddenOnUnmaximize).toBeUndefined();
+      store.open(refA, "files");
+      store.setMaximized(refA, true);
+      store.setMaximized(refA, false);
+      expect(
+        selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["closeAllSurfaces", "closeTerminal"] as const)(
+    "clears maximization through %s without dropping proactive metadata",
+    (close) => {
+      const store = useRightPanelStore.getState();
+      store.openProactive(refA, completedDiff, store.getUserActionRevision(refA));
+      store.closeSurface(refA, "diff");
+      store.openTerminal(refA, "terminal-a");
+      store.close(refA);
+      store.setMaximized(refA, true);
+      if (close === "closeAllSurfaces") store.closeAllSurfaces(refA);
+      else store.closeTerminal(refA, "terminal:terminal-a", "terminal-a");
+      const closed = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+      expect(closed.proactiveDiffTurnId).toBe(completedDiff.turnId);
+      expect(closed.maximized).toBeUndefined();
+      expect(closed.restoreHiddenOnUnmaximize).toBeUndefined();
+    },
+  );
+
+  it("rejects stale proactive offers after maximizing restores a hidden panel", () => {
+    const store = useRightPanelStore.getState();
+    store.open(refA, "files");
+    store.close(refA);
+    const beforeOpen = store.getUserActionRevision(refA);
+    store.setMaximized(refA, true);
+    expect(store.getUserActionRevision(refA)).toBe(beforeOpen + 1);
+    const whileOpen = store.getUserActionRevision(refA);
+    store.setMaximized(refA, false);
+    expect(store.getUserActionRevision(refA)).toBe(whileOpen + 1);
+    expect(store.openProactive(refA, completedDiff, whileOpen)).toBe(false);
+    expect(store.openProactive(refA, linkedPullRequest, whileOpen)).toBe(false);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).isOpen,
+    ).toBe(false);
   });
 
   it("drops the legacy singleton terminal surface during migration", () => {

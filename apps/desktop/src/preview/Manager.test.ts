@@ -647,6 +647,96 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect(
+    "forwards modifier release after the recent-thread binding becomes ineligible",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const send = vi.fn();
+          const tab = makeFaviconWebContents({ id: 42 });
+          Object.assign(tab.webContents, { hostWebContents: { isDestroyed: () => false, send } });
+          fromId.mockReturnValue(tab.webContents);
+          yield* manager.createTab("tab_recent");
+          yield* manager.registerWebview("tab_recent", 42);
+          yield* manager.setForwardedShortcuts([
+            { command: "thread.cycleRecent", shortcut: parseKeybindingShortcut("ctrl+tab")! },
+          ]);
+          const beforeInput = tab.listeners.get("before-input-event")!;
+          const preventDefault = vi.fn();
+          beforeInput(
+            { preventDefault } as never,
+            {
+              type: "keyDown",
+              key: "Tab",
+              control: true,
+              meta: false,
+              alt: false,
+              shift: false,
+            } as never,
+          );
+          expect(preventDefault).toHaveBeenCalledOnce();
+          expect(send).toHaveBeenNthCalledWith(1, "desktop:menu-action", "thread.cycleRecent");
+          yield* manager.setForwardedShortcuts([]);
+          beforeInput({ preventDefault } as never, { type: "keyUp", key: "Control" } as never);
+          expect(send).toHaveBeenNthCalledWith(2, "desktop:menu-action", "thread.cycleRecent.end");
+          Object.assign(tab.webContents, { focusedFrame: null });
+          beforeInput({ preventDefault } as never, { type: "keyUp", key: "Control" } as never);
+          expect(send).toHaveBeenCalledTimes(2);
+        }),
+      ),
+  );
+
+  effectIt.effect.each([
+    ["f6", false],
+    ["shift+f6", true],
+  ] as const)("commits each native recent-thread invocation for %s", ([chord, shift]) =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const send = vi.fn();
+        const tab = makeFaviconWebContents({ id: 42 });
+        Object.assign(tab.webContents, { hostWebContents: { isDestroyed: () => false, send } });
+        fromId.mockReturnValue(tab.webContents);
+        yield* manager.createTab("tab_recent_unmodified");
+        yield* manager.registerWebview("tab_recent_unmodified", 42);
+        const shortcut = parseKeybindingShortcut(chord)!;
+        yield* manager.setForwardedShortcuts([{ command: "thread.cycleRecent", shortcut }]);
+        const beforeInput = tab.listeners.get("before-input-event")!;
+        const preventDefault = vi.fn();
+        const event = { preventDefault };
+        const input = {
+          type: "keyDown",
+          key: "F6",
+          control: false,
+          meta: false,
+          alt: false,
+          shift,
+          isAutoRepeat: false,
+        };
+
+        beforeInput(event as never, input as never);
+        expect(send.mock.calls).toEqual([
+          ["desktop:menu-action", "thread.cycleRecent"],
+          ["desktop:menu-action", "thread.cycleRecent.end"],
+        ]);
+        beforeInput(event as never, { ...input, isAutoRepeat: true } as never);
+        expect(send).toHaveBeenCalledTimes(2);
+        beforeInput(event as never, input as never);
+        expect(send.mock.calls).toEqual([
+          ["desktop:menu-action", "thread.cycleRecent"],
+          ["desktop:menu-action", "thread.cycleRecent.end"],
+          ["desktop:menu-action", "thread.cycleRecent"],
+          ["desktop:menu-action", "thread.cycleRecent.end"],
+        ]);
+        expect(preventDefault).toHaveBeenCalledTimes(3);
+
+        send.mockClear();
+        yield* manager.setForwardedShortcuts([{ command: "view.reopenClosed", shortcut }]);
+        beforeInput(event as never, input as never);
+        expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", "view.reopenClosed");
+      }),
+    ),
+  );
+
   effectIt.effect("isolates failed state listeners and continues delivery", () => {
     const loggedErrors: Array<unknown> = [];
     const logger = Logger.make(({ message }) => {

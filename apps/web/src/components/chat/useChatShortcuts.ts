@@ -1,5 +1,7 @@
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect } from "react";
+import { activeChatShortcutContext } from "../../activeChatShortcutContext";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { resolveChatShortcutCommand, type ShortcutMatchContext } from "../../keybindings";
 import { isTerminalCloseConfirmPending } from "../../lib/terminalCloseConfirm";
@@ -44,6 +46,13 @@ export interface ChatShortcutsInput {
  * act on the current render without re-registering on every change.
  */
 export function useChatShortcuts(input: ChatShortcutsInput) {
+  const readContext = useStableCallback(input.getShortcutContext);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Publish the mounted chat's live context to global shortcut handlers.
+  useLayoutEffect(() => {
+    if (input.enabled) return activeChatShortcutContext.register(readContext);
+  }, [input.enabled, readContext]);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Notify native shortcut forwarding when React changes the active chat context.
+  useLayoutEffect(() => activeChatShortcutContext.refresh());
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
     const { keybindings } = input;
     if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {

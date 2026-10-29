@@ -44,6 +44,18 @@ on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
 Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
 in Settings.
 
+## Switch recent threads and maximize the right panel
+
+In the desktop app, press `Ctrl+Tab` to switch to the most recently viewed
+conversation thread. Hold Ctrl and press Tab again to cycle through recent
+threads. Release Ctrl to keep the selected thread. In a web browser, assign a
+shortcut to **Thread: Cycle Recent** in Keybindings; browsers reserve `Ctrl+Tab`
+for their own tabs.
+
+Use `mod+Alt+F` to maximize the right panel. Press it again to restore its previous
+visibility. A hidden panel opens maximized, then returns to hidden; a visible
+panel returns to its normal width. Both shortcuts can be changed in Keybindings.
+
 ## Copy pull request references
 
 With a PR open in the right panel or on the Pull requests page, use `mod+shift+c`

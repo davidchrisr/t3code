@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { activeChatShortcutContext } from "../activeChatShortcutContext";
 import { useClosedViewStore } from "../closedViewStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { environmentCatalog } from "../connection/catalog";
@@ -47,6 +48,7 @@ const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "sidebar.toggle",
   "rightPanel.toggle",
   "rightPanel.toggleMaximized",
+  "thread.cycleRecent",
 ] as const;
 
 const isGlobalPullRequests = (ref: ScopedThreadRef) =>
@@ -181,34 +183,44 @@ export function ReopenClosedViewShortcut() {
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview?.setForwardedShortcuts) return;
-    const options = {
-      context: {
-        previewFocus: true,
-        previewOpen: true,
-        terminalFocus: false,
-        terminalOpen,
-        editableFocus: false,
-        modelPickerOpen: false,
-        isDesktop: true,
-        isWeb: false,
-      },
+    let lastShortcuts = "";
+    const update = () => {
+      const options = {
+        context: {
+          ...activeChatShortcutContext.read(null),
+          previewFocus: true,
+          previewOpen: true,
+          terminalFocus: false,
+          terminalOpen,
+          editableFocus: false,
+          modelPickerOpen: false,
+          composerFocus: false,
+          isDesktop: true,
+          isWeb: false,
+        },
+      };
+      // Guest browser processes miss app keydown listeners; desktop forwards the chords as menu actions.
+      const commands = [
+        ...(hasHistory ? (["view.reopenClosed"] as const) : []),
+        ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,
+      ];
+      const shortcuts = commands.flatMap((command) =>
+        effectiveShortcutsForCommand(keybindings, command, options).map((shortcut) => ({
+          command,
+          shortcut,
+        })),
+      );
+      const serialized = JSON.stringify(shortcuts);
+      if (serialized === lastShortcuts) return;
+      lastShortcuts = serialized;
+      void preview.setForwardedShortcuts?.(shortcuts).catch(() => undefined);
     };
-    // Guest browser processes miss app keydown listeners; desktop forwards the chords as menu actions.
-    const commands = [
-      ...(hasHistory ? (["view.reopenClosed"] as const) : []),
-      ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,
-    ];
-    void preview
-      .setForwardedShortcuts(
-        commands.flatMap((command) =>
-          effectiveShortcutsForCommand(keybindings, command, options).map((shortcut) => ({
-            command,
-            shortcut,
-          })),
-        ),
-      )
-      .catch(() => undefined);
+    update();
+    const unsubscribe = activeChatShortcutContext.subscribe(update);
+    window.addEventListener("focusin", update);
     return () => {
+      unsubscribe();
+      window.removeEventListener("focusin", update);
       void preview.setForwardedShortcuts?.([]).catch(() => undefined);
     };
   }, [hasHistory, keybindings, terminalOpen]);

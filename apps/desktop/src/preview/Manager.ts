@@ -1477,6 +1477,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
       const host = wc.hostWebContents;
+      if (
+        input.type === "keyUp" &&
+        ["Control", "Meta", "Alt"].includes(input.key) &&
+        host &&
+        !host.isDestroyed() &&
+        holdsKeyboardFocus(wc)
+      ) {
+        host.send(MENU_ACTION_CHANNEL, "thread.cycleRecent.end");
+      }
       const forwarded =
         input.type === "keyDown" &&
         !input.isComposing &&
@@ -1505,7 +1514,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         );
       if (forwarded && host) {
         event.preventDefault();
-        if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, forwarded.command);
+        if (!input.isAutoRepeat) {
+          host.send(MENU_ACTION_CHANNEL, forwarded.command);
+          if (
+            forwarded.command === "thread.cycleRecent" &&
+            !input.control &&
+            !input.meta &&
+            !input.alt
+          ) {
+            host.send(MENU_ACTION_CHANNEL, "thread.cycleRecent.end");
+          }
+        }
         return;
       }
       if (isPreviewRefreshShortcut(input)) {
