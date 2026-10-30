@@ -80,12 +80,14 @@ export function HtmlRenderFrame(props: {
   // Tied to the viewer's lifetime: unmounting while expanded must still release
   // the timeline's follow pin, which a close handler alone never reaches.
   const expanded = expandedSrc !== null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the parent's fullscreen pin while expanded and releases it on collapse or unmount
   useEffect(() => {
     if (!expanded) return;
     onFullscreenChange?.(true);
     return () => onFullscreenChange?.(false);
   }, [expanded, onFullscreenChange]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the iframe response timeout and report failed citation navigation while mounted.
   useEffect(() => {
     const onFailure = () =>
       toastManager.add({
@@ -105,6 +107,7 @@ export function HtmlRenderFrame(props: {
     });
   }, [attachmentId, failed, props.citationRequest]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scroll the virtualized list to keep the cited iframe mounted during navigation.
   useEffect(() => {
     const request = props.citationRequest;
     const list = props.listRef?.current;

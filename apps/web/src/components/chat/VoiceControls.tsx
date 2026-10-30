@@ -21,7 +21,7 @@ export function VoiceControls(props: {
   const current =
     state.target?.environmentId === props.environmentId && state.target.threadId === props.threadId;
   const active = current && state.phase !== "idle";
-  // oxlint-disable-next-line t3code/react-effect-budget -- Release microphone capture when its owning thread changes or unmounts.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release microphone capture when its owning thread changes or unmounts.
   useEffect(
     () => () => {
       const target = voiceMode.getState().target;
@@ -30,11 +30,11 @@ export function VoiceControls(props: {
     },
     [props.environmentId, props.threadId],
   );
-  // oxlint-disable-next-line t3code/react-effect-budget -- Stop microphone capture when the environment revokes operate permission.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Stop microphone capture when the environment revokes operate permission.
   useEffect(() => {
     if (active && !permitted) voiceMode.stop();
   }, [active, permitted]);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Attach voice shortcuts to the browser's global keydown event.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Attach voice shortcuts to the browser's global keydown event.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing || isCommandPaletteOpen()) return;

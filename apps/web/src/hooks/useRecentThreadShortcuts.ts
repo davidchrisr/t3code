@@ -18,6 +18,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { createRecentThreadCycle } from "../recentThreadCycle";
 import { useStableCallback } from "./useStableCallback";
 import { activeChatShortcutContext } from "../activeChatShortcutContext";
+import { useDelegatedUnderParent } from "../state/entities";
 
 export function useRecentThreadShortcuts(input: {
   readonly threads: readonly EnvironmentThreadShell[];
@@ -31,14 +32,15 @@ export function useRecentThreadShortcuts(input: {
     if (ref) void input.navigateToThread(ref);
   });
   const [cycle] = useState(() => createRecentThreadCycle(navigate));
+  const delegatedUnderParent = useDelegatedUnderParent();
   const currentKey = input.currentThreadRef ? scopedThreadKey(input.currentThreadRef) : null;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Acknowledge rendered routes in the keyboard cycle controller.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Acknowledge rendered routes in the keyboard cycle controller.
   useLayoutEffect(() => {
     if (currentKey !== null) cycle.visit(currentKey);
   }, [currentKey, cycle]);
 
   const advance = useEffectEvent(() => {
-    const recentThreads = filterSidebarV2VisibleThreads(input.threads, null)
+    const recentThreads = filterSidebarV2VisibleThreads(input.threads, null, delegatedUnderParent)
       .filter((thread) => thread.deletedAt === null)
       .map((thread) => ({
         thread,
@@ -84,7 +86,7 @@ export function useRecentThreadShortcuts(input: {
     if (!event.ctrlKey && !event.metaKey && !event.altKey) cycle.finish();
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- Subscribe to window input and desktop IPC for the mounted shortcut scope.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to window input and desktop IPC for the mounted shortcut scope.
   useEffect(() => {
     const finish = () => cycle.finish();
     const onKeyUp = (event: KeyboardEvent) => {

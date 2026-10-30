@@ -55,6 +55,7 @@ export function AssistantSelectionToolbar({
       }),
   });
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node and clamps its position inside the window before paint
   useLayoutEffect(() => {
     const toolbar = toolbarRef.current;
     if (!toolbar || !selection || touch) return;
@@ -63,6 +64,7 @@ export function AssistantSelectionToolbar({
     toolbar.style.top = `${Math.max(8, Math.min(selection.position.y, window.innerHeight - rect.height - 8))}px`;
   }, [selection, touch]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to document selectionchange and keydown to track text selections in the viewport
   useEffect(() => {
     if (!viewport) return;
     const clear = () => setSelection(null);

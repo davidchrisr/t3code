@@ -165,17 +165,17 @@ export function HtmlRenderCitationControls({
     post({ action: "cited", accepted });
     if (accepted) setPicking(false);
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- Subscribe to notifications from the sandboxed visualization frame.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to notifications from the sandboxed visualization frame.
   useEffect(() => {
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, []);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize citation availability with each loaded iframe document.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize citation availability with each loaded iframe document.
   useEffect(() => {
     if (loaded && context.onCite) post({ action: "enable" });
   }, [loaded, context.onCite, post]);
   const request = context.request;
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the active citation request with the opaque iframe and clear it on cleanup.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronize the active citation request with the opaque iframe and clear it on cleanup.
   useEffect(() => {
     if (
       !loaded ||

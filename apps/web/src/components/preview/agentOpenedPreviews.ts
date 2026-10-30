@@ -10,7 +10,6 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 
 import {
@@ -234,7 +233,7 @@ export function resetDeviceSessionBaselinesForTests(): void {
 function watchEnvironmentDevices(environmentId: EnvironmentId): () => void {
   const atom = deviceEnvironment.state({ environmentId, input: {} });
   const update = () => {
-    const state = Option.getOrNull(AsyncResult.value(appAtomRegistry.get(atom)));
+    const state = AsyncResult.getOrElse(appAtomRegistry.get(atom), () => null);
     if (state === null) return;
     applyDeviceSnapshot(environmentId, state, {
       sheetLayout: window.matchMedia(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY).matches,

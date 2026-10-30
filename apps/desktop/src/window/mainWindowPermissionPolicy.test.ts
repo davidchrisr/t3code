@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it } from "vite-plus/test";
 import { isTrustedAppOrigin, mainWindowPermissionAllowed } from "./mainWindowPermissionPolicy.ts";
 
 it("accepts app pages and rejects lookalike or opaque origins", () => {

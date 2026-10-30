@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 export function useVisualViewportVariables(enabled: boolean) {
-  // oxlint-disable-next-line t3code/react-effect-budget -- Visual viewport events update CSS variables while the touch viewport is mounted.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Visual viewport events update CSS variables while the touch viewport is mounted.
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!enabled || !viewport) return;

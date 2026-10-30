@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ThreadId, type ProviderVoiceSessionEvent } from "@t3tools/contracts";
 import { VoiceSession } from "./voiceSession";
 
