@@ -7,12 +7,20 @@ disappears or changes. The [shared format](../../packages/shared/src/assistantCi
 stable environment IDs without a browser origin, so moving between local, remote,
 and tunnel connections does not change a citation's identity.
 
-Source navigation is best effort. [Text selectors](../../apps/web/src/lib/assistantTextSelection.ts)
+Source navigation is best effort. For assistant response citations, [text selectors](../../apps/web/src/lib/assistantTextSelection.ts)
 refer to rendered text after whitespace normalization, measured in UTF-16 units.
 They cannot be applied to raw Markdown. The original excerpt keeps its whitespace;
 normalization is only for locating it. Repeated text needs an unambiguous context
 match, even if one occurrence still sits at the saved offsets. Guessing could
 highlight the wrong claim.
+
+Visualization citations identify the published attachment, rather than an expiring
+asset URL. The sandboxed document captures and resolves selections through a
+message bridge; the client supplies the environment, thread, and attachment
+identity. Text offsets refer to the document's visible text nodes. Element
+citations retain their markup, and navigation requires it to match before
+highlighting a selector, since the same selector can name different content after
+an interactive update.
 
 Navigation owns the highlight's lifetime across virtual-row remounts. The source
 row must be fetched, unfolded, mounted, and measured before quote positioning

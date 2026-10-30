@@ -5,6 +5,10 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
+import {
+  HTML_RENDER_MAX_PAGE_BYTES,
+  injectHtmlRenderCitationBootstrap,
+} from "@t3tools/shared/htmlRender";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
@@ -165,7 +169,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly fileName?: string;
     readonly mimeType?: string;
     readonly file?: OpenMediaFile;
-    readonly renderIntent?: "mcp-app";
+    readonly renderIntent?: "mcp-app" | "html-render";
   },
   rangeHeader?: string,
   ifRangeHeader?: string,
@@ -173,16 +177,21 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
   if (
-    asset.renderIntent === "mcp-app" &&
+    asset.renderIntent !== undefined &&
     !asset.download &&
     headers["Content-Type"] === "text/html; charset=utf-8"
   ) {
-    const bytes = yield* readMcpAppHtml(asset.path);
+    const bytes = yield* readMcpAppHtml(
+      asset.path,
+      asset.renderIntent === "html-render" ? HTML_RENDER_MAX_PAGE_BYTES : undefined,
+    );
     if (bytes === null) {
-      return HttpServerResponse.text("MCP app is too large to preview.", { status: 413 });
+      return HttpServerResponse.text("HTML page is too large to preview.", { status: 413 });
     }
     const body = new TextEncoder().encode(
-      injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(new TextDecoder().decode(bytes))),
+      asset.renderIntent === "html-render"
+        ? injectHtmlRenderCitationBootstrap(new TextDecoder().decode(bytes))
+        : injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(new TextDecoder().decode(bytes))),
     );
     headers["Content-Length"] = String(body.byteLength);
     return method === "HEAD"

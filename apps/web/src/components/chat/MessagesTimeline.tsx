@@ -59,7 +59,12 @@ import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { type AssistantCitationRequest } from "./AssistantCitationSource";
 import { useAssistantCitationTarget } from "./useAssistantCitationTarget";
-import { resolveCitationPhase, type CitedHistory } from "./citationProcedure";
+import {
+  citedSource,
+  isCitedEntry,
+  resolveCitationPhase,
+  type CitedHistory,
+} from "./citationProcedure";
 import {
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
@@ -603,9 +608,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     citationHistory._tag !== "failed"
       ? timelineEntries.find(
           (entry) =>
-            entry.kind === "message" &&
-            entry.message.role === "assistant" &&
-            entry.message.id === citationRequest.citation.messageId,
+            (entry.kind === "html-render" ||
+              (entry.kind === "message" && entry.message.role === "assistant")) &&
+            isCitedEntry(entry, citedSource(citationRequest.citation)),
         )
       : undefined;
   if (citationRequest && citedEntry) {
@@ -738,7 +743,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     phase: citationRequest
       ? resolveCitationPhase({
           history: citationHistory,
-          messageId: citationRequest.citation.messageId,
+          source: citedSource(citationRequest.citation),
           entries: timelineEntries,
           rows,
         })
@@ -1006,6 +1011,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
 
   const sharedState: TimelineRowSharedState = {
+    onCiteAssistantText,
     citationRequest: readyCitationRequest,
     listRef,
     timestampFormat,

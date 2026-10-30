@@ -131,6 +131,10 @@
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"
     },
+    "./htmlRenderCitations": {
+      "types": "./src/htmlRenderCitations.ts",
+      "import": "./src/htmlRenderCitations.ts"
+    },
     "./favicon": {
       "types": "./src/favicon.ts",
       "import": "./src/favicon.ts"

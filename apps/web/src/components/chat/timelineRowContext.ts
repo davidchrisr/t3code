@@ -1,6 +1,7 @@
 import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
 import {
   type EnvironmentId,
+  type AssistantCitation,
   type MessageId,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
@@ -19,6 +20,7 @@ import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplat
 import { type ChatFileAttachment } from "../../types";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
+import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
@@ -37,6 +39,9 @@ export interface TurnItemSource {
 }
 
 export interface TimelineRowSharedState {
+  onCiteAssistantText?:
+    | ((citation: AssistantCitation, anchor: AssistantCitationSourceAnchor) => boolean)
+    | undefined;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;

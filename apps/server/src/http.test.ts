@@ -28,6 +28,67 @@ import * as ServerConfig from "./config.ts";
 
 import { assetResponseHeaders, assetFileResponse, downloadContentDisposition } from "./http.ts";
 import * as ServerHttp from "./http.ts";
+import { injectHtmlRenderCitationBootstrap } from "@t3tools/shared/htmlRender";
+
+describe("visualization asset responses", () => {
+  it.effect("keeps visualizations larger than the MCP app limit viewable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-large-visualization-" });
+      const file = path.join(directory, "visual.html");
+      yield* fs.writeFileString(
+        file,
+        `<html><head></head><body>${" ".repeat(MCP_APP_MAX_HTML_BYTES + 128 * 1024 + 1)}</body></html>`,
+      );
+      const response = yield* assetFileResponse({
+        path: file,
+        mimeType: "text/html",
+        renderIntent: "html-render",
+      });
+      expect(response.status).toBe(200);
+      const mcpResponse = yield* assetFileResponse({
+        path: file,
+        mimeType: "text/html",
+        renderIntent: "mcp-app",
+      });
+      expect(mcpResponse.status).toBe(413);
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("adds the citation bridge to existing HTML only for inline visualization intent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-visualization-citation-" });
+      const file = path.join(directory, "visual.html");
+      const html = "<html><head></head><body><svg><rect width='42'/></svg></body></html>";
+      yield* fs.writeFileString(file, html);
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse(
+            { path: file, mimeType: "text/html", renderIntent: "html-render" },
+            undefined,
+            undefined,
+            method,
+          ),
+        );
+        const expected = injectHtmlRenderCitationBootstrap(html);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-length")).toBe(
+          String(new TextEncoder().encode(expected).byteLength),
+        );
+        expect(yield* Effect.promise(() => response.text())).toBe(
+          method === "HEAD" ? "" : expected,
+        );
+      }
+      const download = HttpServerResponse.toWeb(
+        yield* assetFileResponse({ path: file, download: true, renderIntent: "html-render" }),
+      );
+      expect(yield* Effect.promise(() => download.text())).toBe(html);
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+});
 
 describe("MCP app asset responses", () => {
   it.effect(

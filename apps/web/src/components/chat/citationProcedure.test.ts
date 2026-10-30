@@ -1,4 +1,4 @@
-import { MessageId, RunId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import type { TimelineEntry } from "../../session-logic";
 import {
@@ -33,6 +33,16 @@ function scriptedHistory(snapshots: ReadonlyArray<CitedThreadSnapshot | null>) {
 const notLoaded = { message: null, hasMoreHistory: true } satisfies CitedThreadSnapshot;
 
 describe("loadCitedHistory", () => {
+  it("reports a missing visualization by its source type", async () => {
+    await expect(
+      loadCitedHistory({
+        sourceName: "visualization",
+        signal: new AbortController().signal,
+        readThread: async () => ({ message: null, hasMoreHistory: false }),
+        loadThrough: async () => ({ _tag: "noop" }),
+      }),
+    ).resolves.toMatchObject({ _tag: "failed", title: "The cited visualization is unavailable" });
+  });
   it("finds a cited response that is already loaded without paging", async () => {
     const history = scriptedHistory([{ message: "assistant", hasMoreHistory: true }]);
     await expect(history.run()).resolves.toEqual({ _tag: "found" });
@@ -114,7 +124,7 @@ describe("citedThreadSnapshot", () => {
     history: settledHistory,
     status: "synchronizing",
     error: null,
-    messageId: "cited",
+    source: { kind: "message", id: "cited" },
   } satisfies Parameters<typeof citedThreadSnapshot>[0];
 
   it("keeps waiting while a thread that has not loaded yet is still synchronizing", () => {
@@ -128,6 +138,38 @@ describe("citedThreadSnapshot", () => {
       _tag: "failed",
       title: "Could not load the cited response",
     });
+  });
+
+  it("finds a visualization in completed tool output by attachment ID", () => {
+    const thread = {
+      environmentId: EnvironmentId.make("test"),
+      projection: {
+        visibleTurnItems: [
+          {
+            item: {
+              type: "dynamic_tool",
+              status: "completed",
+              toolName: "mcp__t3_code__html_render",
+              output: { htmlRender: { attachmentId: "chart.html", title: "Chart", height: 420 } },
+            },
+          },
+        ],
+      },
+    } as unknown as NonNullable<Parameters<typeof citedThreadSnapshot>[0]["thread"]>;
+    expect(
+      citedThreadSnapshot({
+        ...unloaded,
+        thread,
+        source: { kind: "html-render", id: "chart.html" },
+      }),
+    ).toMatchObject({ message: "assistant", hasMoreHistory: false });
+    expect(
+      citedThreadSnapshot({
+        ...unloaded,
+        thread,
+        source: { kind: "html-render", id: "other.html" },
+      }),
+    ).toMatchObject({ message: null });
   });
 });
 
@@ -154,6 +196,28 @@ describe("resolveCitationPhase", () => {
     id: "cited-row",
     message: entry.message,
   } as MessagesTimelineRow;
+  const htmlEntry: TimelineEntry = {
+    kind: "html-render",
+    id: "chart-entry",
+    createdAt: at,
+    runId,
+    htmlRender: { attachmentId: "chart.html", title: "Chart", height: 420 },
+  };
+
+  it("expands a folded visualization and pins its rendered row when ready", () => {
+    const source = { kind: "html-render", id: "chart.html" } as const;
+    expect(
+      resolveCitationPhase({ history: { _tag: "found" }, source, entries: [htmlEntry], rows: [] }),
+    ).toEqual({ _tag: "expanding" });
+    expect(
+      resolveCitationPhase({
+        history: { _tag: "found" },
+        source,
+        entries: [htmlEntry],
+        rows: [{ ...htmlEntry, id: "chart-row" } as MessagesTimelineRow],
+      }),
+    ).toEqual({ _tag: "ready", rowId: "chart-row" });
+  });
   const phase = (input: {
     history?: "loading" | "found" | "failed";
     entries?: ReadonlyArray<TimelineEntry>;
@@ -161,7 +225,7 @@ describe("resolveCitationPhase", () => {
   }) =>
     resolveCitationPhase({
       history: { _tag: input.history ?? "loading" },
-      messageId,
+      source: { kind: "message", id: messageId },
       entries: input.entries ?? [],
       rows: input.rows ?? [],
     });

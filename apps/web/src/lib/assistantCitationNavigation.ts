@@ -25,7 +25,7 @@ export function assistantCitationFromLocation(href: string) {
   const hashIndex = href.indexOf("#");
   if (hashIndex === -1) return null;
   const hash = href.slice(hashIndex + 1);
-  if (!hash.startsWith(CITATION_HASH_PREFIX) || hash.length > 140_000) return null;
+  if (!hash.startsWith(CITATION_HASH_PREFIX) || hash.length > 400_000) return null;
   try {
     return parseAssistantCitationHref(
       Result.getOrThrow(Base64Url.decodeString(hash.slice(CITATION_HASH_PREFIX.length))),

@@ -1,11 +1,27 @@
 import { useAtomValue } from "@effect/atom-react";
 import { type AtomCommandSuccess, runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { Atom, type AtomRegistry } from "effect/reactivity";
+import type { AssistantCitation } from "@t3tools/contracts";
+import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import type { TimelineEntry } from "../../session-logic";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { toastManager } from "../ui/toast";
 import type { AssistantCitationRequest } from "./AssistantCitationSource";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
+
+type CitedSource = { readonly kind: "message" | "html-render"; readonly id: string };
+
+export function citedSource(citation: AssistantCitation): CitedSource {
+  return citation.version === 2
+    ? { kind: "html-render", id: citation.htmlRender.attachmentId }
+    : { kind: "message", id: citation.messageId };
+}
+
+export function isCitedEntry(entry: TimelineEntry | MessagesTimelineRow, source: CitedSource) {
+  return source.kind === "html-render"
+    ? entry.kind === "html-render" && entry.htmlRender.attachmentId === source.id
+    : entry.kind === "message" && entry.message.id === source.id;
+}
 
 /** Whether the cited response is in the loaded history, after paging toward it. */
 export type CitedHistory =
@@ -56,14 +72,23 @@ const UNAVAILABLE = {
  * the signal aborts.
  */
 export async function loadCitedHistory(input: {
+  readonly sourceName?: "response" | "visualization";
   readonly signal: AbortSignal;
   readonly readThread: () => Promise<CitedThreadSnapshot | null>;
   readonly loadThrough: () => Promise<HistoryPageResult>;
 }): Promise<CitedHistoryOutcome> {
+  const couldNotLoad = {
+    ...COULD_NOT_LOAD,
+    title: `Could not load the cited ${input.sourceName ?? "response"}`,
+  };
+  const unavailable = {
+    ...UNAVAILABLE,
+    title: `The cited ${input.sourceName ?? "response"} is unavailable`,
+  };
   for (let attempts = 0; ; attempts += 1) {
     const thread = await input.readThread();
     if (thread === null || input.signal.aborted) return { _tag: "aborted" };
-    if (thread.loadFailed) return COULD_NOT_LOAD;
+    if (thread.loadFailed) return couldNotLoad;
     if (thread.message === "assistant") return { _tag: "found" };
     if (thread.message === "other") {
       return {
@@ -72,34 +97,30 @@ export async function loadCitedHistory(input: {
         description: "The selected text is still saved in your citation.",
       };
     }
-    if (!thread.hasMoreHistory) return UNAVAILABLE;
-    if (attempts >= MAX_CITATION_PAGES) return COULD_NOT_LOAD;
+    if (!thread.hasMoreHistory) return unavailable;
+    if (attempts >= MAX_CITATION_PAGES) return couldNotLoad;
     const result = await input.loadThrough();
     if (input.signal.aborted) return { _tag: "aborted" };
-    if (result._tag === "error") return COULD_NOT_LOAD;
+    if (result._tag === "error") return couldNotLoad;
     // A noop page means the store has nothing older to load (no cursor, or the
     // thread is gone), so re-reading would only spin on the same snapshot.
-    if (result._tag === "noop") return UNAVAILABLE;
+    if (result._tag === "noop") return unavailable;
   }
 }
 
 /** Where the citation stands for the rows the timeline currently shows. */
 export function resolveCitationPhase(input: {
   readonly history: CitedHistory;
-  readonly messageId: string;
+  readonly source: CitedSource;
   readonly entries: ReadonlyArray<TimelineEntry>;
   readonly rows: ReadonlyArray<MessagesTimelineRow>;
 }): CitationPhase {
   if (input.history._tag === "failed") return { _tag: "failed" };
-  const source = input.entries.find(
-    (entry) => entry.kind === "message" && entry.message.id === input.messageId,
-  );
+  const source = input.entries.find((entry) => isCitedEntry(entry, input.source));
   // The history store can hold the message a render before the entries do.
   if (!source) return { _tag: "loading" };
-  if (source.kind !== "message" || source.message.role !== "assistant") return { _tag: "failed" };
-  const row = input.rows.find(
-    (candidate) => candidate.kind === "message" && candidate.message.id === input.messageId,
-  );
+  if (source.kind === "message" && source.message.role !== "assistant") return { _tag: "failed" };
+  const row = input.rows.find((candidate) => isCitedEntry(candidate, input.source));
   if (row) return { _tag: "ready", rowId: row.id };
   return { _tag: "expanding" };
 }
@@ -118,7 +139,7 @@ export function citedThreadSnapshot(input: {
   readonly history: ThreadDetail<"historyAtom">;
   readonly status: ThreadDetail<"statusAtom">;
   readonly error: ThreadDetail<"errorAtom">;
-  readonly messageId: string;
+  readonly source: CitedSource;
 }): CitedThreadSnapshot | null {
   if (input.history.loading) return null;
   if (input.thread === null) {
@@ -126,13 +147,16 @@ export function citedThreadSnapshot(input: {
     return input.error === null ? null : { message: null, hasMoreHistory: false, loadFailed: true };
   }
   // Older pages merge into the visible turn items, not the message list.
-  const item = input.thread.projection.visibleTurnItems.find(
-    (row) =>
-      (row.item.type === "assistant_message" || row.item.type === "user_message") &&
-      row.item.messageId === input.messageId,
+  const item = input.thread.projection.visibleTurnItems.find((row) =>
+    input.source.kind === "html-render"
+      ? row.item.type === "dynamic_tool" &&
+        row.item.status === "completed" &&
+        htmlRenderFromToolItem(row.item)?.attachmentId === input.source.id
+      : (row.item.type === "assistant_message" || row.item.type === "user_message") &&
+        row.item.messageId === input.source.id,
   )?.item;
   return {
-    message: item === undefined ? null : item.type === "assistant_message" ? "assistant" : "other",
+    message: item === undefined ? null : item.type === "user_message" ? "other" : "assistant",
     hasMoreHistory: input.history.hasMoreHistory,
   };
 }
@@ -141,7 +165,7 @@ interface CitedHistoryKey {
   readonly key: string;
   readonly environmentId: AssistantCitationRequest["citation"]["environmentId"];
   readonly threadId: AssistantCitationRequest["citation"]["threadId"];
-  readonly messageId: AssistantCitationRequest["citation"]["messageId"];
+  readonly source: CitedSource;
 }
 
 function waitForSettledThread(
@@ -176,7 +200,7 @@ function waitForSettledThread(
  * Plain-object keys compare structurally, so one activation is one procedure.
  */
 const citedHistoryAtom = Atom.family(
-  ({ key, environmentId, threadId, messageId }: CitedHistoryKey) => {
+  ({ key, environmentId, threadId, source }: CitedHistoryKey) => {
     const ref = { environmentId, threadId };
     const threadAtom = environmentThreadDetails.quietThreadAtom(ref);
     const historyAtom = environmentThreadDetails.historyAtom(ref);
@@ -188,20 +212,27 @@ const citedHistoryAtom = Atom.family(
         history: get(historyAtom),
         status: get(statusAtom),
         error: get(errorAtom),
-        messageId,
+        source,
       }),
     );
     return Atom.make((get): CitedHistory => {
       const controller = new AbortController();
       get.addFinalizer(() => controller.abort());
       void loadCitedHistory({
+        sourceName: source.kind === "html-render" ? "visualization" : "response",
         signal: controller.signal,
         readThread: () => waitForSettledThread(get.registry, settledThreadAtom, controller.signal),
         loadThrough: async () => {
           const result = await runAtomCommand(
             get.registry,
             threadEnvironment.loadEarlierHistory,
-            { environmentId, input: { threadId, throughEntryId: messageId } },
+            {
+              environmentId,
+              input: {
+                threadId,
+                ...(source.kind === "message" ? { throughEntryId: source.id } : {}),
+              },
+            },
             { label: "load cited thread history", reportFailure: false },
           );
           return result._tag === "Success"
@@ -234,7 +265,7 @@ export function useCitedHistory(request: AssistantCitationRequest | null): Cited
           key: request.key,
           environmentId: request.citation.environmentId,
           threadId: request.citation.threadId,
-          messageId: request.citation.messageId,
+          source: citedSource(request.citation),
         }),
   );
 }
