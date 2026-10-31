@@ -310,18 +310,24 @@ describe("ClientSettings notifications", () => {
 });
 
 describe("ClientSettings chat expansion", () => {
-  it("expands tables, thoughts, and completed turns when saved preferences omit the settings", () => {
+  it("expands command lists, tables, thoughts, and completed turns when saved preferences omit the settings", () => {
     expect(decodeClientSettings({})).toMatchObject({
       alwaysExpandTables: true,
       alwaysExpandThoughts: true,
+      commandExpansion: "commands",
       autoCollapseCompletedTurns: false,
     });
     const saved = {
       alwaysExpandTables: false,
       alwaysExpandThoughts: false,
+      commandExpansion: "collapsed",
       autoCollapseCompletedTurns: true,
     };
     expect(decodeClientSettings(saved)).toMatchObject(saved);
+    for (const commandExpansion of ["collapsed", "commands", "full"] as const) {
+      expect(decodeClientSettings({ commandExpansion }).commandExpansion).toBe(commandExpansion);
+      expect(decodeClientSettingsPatch({ commandExpansion })).toMatchObject({ commandExpansion });
+    }
   });
 });
 

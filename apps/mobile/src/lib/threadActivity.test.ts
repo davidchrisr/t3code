@@ -37,6 +37,7 @@ import {
 const COLLAPSED_CHAT_SETTINGS = {
   alwaysExpandTables: false,
   alwaysExpandThoughts: false,
+  commandExpansion: "collapsed" as const,
   autoCollapseCompletedTurns: true,
 };
 
@@ -48,6 +49,63 @@ function deriveTestFeed(...args: Parameters<typeof deriveThreadFeedPresentation>
 const threadId = ThreadId.make("thread-1");
 const sourceThreadId = ThreadId.make("thread-source");
 const runId = RunId.make("run-1");
+
+it.each(["collapsed", "commands", "full"] as const)(
+  "preserves command group overrides and cache updates with %s selected",
+  (commandExpansion) => {
+    const first = command();
+    const second = { ...command(), id: TurnItemId.make("second-command"), ordinal: 2 };
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(first, 1),
+      projected(second, 2),
+      projected({ ...assistantMessage(), ordinal: 3 }, 3),
+    ]);
+    const group = feed.find((entry) => entry.type === "activity-group");
+    if (group?.type !== "activity-group") throw new Error("Expected command group");
+    const groupId = `work-group:${group.activities[0]!.id}`;
+    const latestRun: ThreadFeedLatestRun = {
+      runId,
+      status: "completed",
+      startedAt: "2026-06-20T00:00:01.000Z",
+      completedAt: "2026-06-20T00:00:03.000Z",
+    };
+    const cache = createThreadFeedCache();
+    const present = (
+      expandedGroups = new Set<string>(),
+      collapsedGroups = new Set<string>(),
+      level = commandExpansion,
+    ) =>
+      deriveThreadFeedPresentation(
+        feed,
+        latestRun,
+        new Set(),
+        expandedGroups,
+        null,
+        false,
+        cache,
+        { ...COLLAPSED_CHAT_SETTINGS, commandExpansion: level, autoCollapseCompletedTurns: false },
+        new Set(),
+        new Set(),
+        collapsedGroups,
+      );
+    expect(present().find((entry) => entry.type === "work-toggle")).toMatchObject({
+      expanded: commandExpansion !== "collapsed",
+    });
+    expect(
+      present(new Set(), new Set([groupId])).find((entry) => entry.type === "work-toggle"),
+    ).toMatchObject({ expanded: false });
+    expect(present(new Set([groupId])).find((entry) => entry.type === "work-toggle")).toMatchObject(
+      { expanded: true },
+    );
+    expect(
+      present(new Set(), new Set(), "collapsed").find((entry) => entry.type === "work-toggle"),
+    ).toMatchObject({ expanded: false });
+    expect(
+      present(new Set(), new Set(), "full").find((entry) => entry.type === "work-toggle"),
+    ).toMatchObject({ expanded: true });
+  },
+);
 
 it("loads deferred thoughts without expanding automatically collapsed turns", () => {
   const work = Array.from({ length: 151 }, (_, index): OrchestrationV2TurnItem => {
@@ -83,12 +141,15 @@ it("loads deferred thoughts without expanding automatically collapsed turns", ()
     completedAt: "2026-06-20T00:00:03.000Z",
   };
   const cache = createThreadFeedCache();
-  for (const [alwaysExpandThoughts, manuallyCollapsed] of [
-    [false, false],
-    [true, false],
-    [true, true],
+  for (const [alwaysExpandThoughts, manuallyCollapsed, commandExpansion] of [
+    [false, false, "collapsed"],
+    [true, false, "collapsed"],
+    [true, true, "collapsed"],
+    [false, false, "commands"],
+    [false, false, "full"],
+    [false, true, "full"],
   ] as const) {
-    const settings = { ...COLLAPSED_CHAT_SETTINGS, alwaysExpandThoughts };
+    const settings = { ...COLLAPSED_CHAT_SETTINGS, alwaysExpandThoughts, commandExpansion };
     const collapsedRuns = new Set(manuallyCollapsed ? [runId] : []);
     const deferred = deriveThreadFeedPresentation(
       deferredFeed,
@@ -103,7 +164,7 @@ it("loads deferred thoughts without expanding automatically collapsed turns", ()
     );
     const fold = deferred.find((entry) => entry.type === "run-fold");
     expect(fold).toMatchObject({ expanded: false, deferredWorkItemIds: [first.id] });
-    if (alwaysExpandThoughts && !manuallyCollapsed)
+    if ((alwaysExpandThoughts || commandExpansion !== "collapsed") && !manuallyCollapsed)
       expect(fold).toMatchObject({ loadDeferredWork: true });
     else expect(fold).not.toHaveProperty("loadDeferredWork", true);
     const loaded = deriveThreadFeedPresentation(
@@ -117,11 +178,17 @@ it("loads deferred thoughts without expanding automatically collapsed turns", ()
       settings,
       collapsedRuns,
     );
+    const loadedWork = loaded
+      .filter((entry) => entry.type === "activity-group")
+      .flatMap((entry) => entry.activities);
+    if (commandExpansion === "collapsed") {
+      expect(loadedWork.map((activity) => activity.workEntry.detail)).toEqual(
+        alwaysExpandThoughts && !manuallyCollapsed ? ["Deferred thought"] : [],
+      );
+    }
     expect(
-      loaded
-        .filter((entry) => entry.type === "activity-group")
-        .flatMap((entry) => entry.activities.map((activity) => activity.workEntry.detail)),
-    ).toEqual(alwaysExpandThoughts && !manuallyCollapsed ? ["Deferred thought"] : []);
+      loadedWork.filter((activity) => activity.workEntry.itemType === "command_execution"),
+    ).toHaveLength(commandExpansion !== "collapsed" && !manuallyCollapsed ? 150 : 0);
     expect(loaded.find((entry) => entry.type === "run-fold")).toMatchObject({ expanded: false });
   }
   const workAnchor = deferredFeed.find((entry) => entry.type === "activity-group")!;
@@ -948,6 +1015,7 @@ describe("buildThreadFeed", () => {
     const chatExpansion = {
       alwaysExpandTables: false,
       alwaysExpandThoughts: false,
+      commandExpansion: "collapsed" as const,
       autoCollapseCompletedTurns: false,
     };
     const cache = createThreadFeedCache();

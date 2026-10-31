@@ -603,6 +603,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["thought thinking reasoning expand collapse"],
   },
   {
+    id: "command-expansion",
+    title: "Default command expansion",
+    to: "/settings/chat",
+    searchTerms: ["default command tool activity expand collapse output response details"],
+  },
+  {
     id: "auto-collapse-completed-turns",
     title: "Automatically collapse completed turns",
     to: "/settings/chat",

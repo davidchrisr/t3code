@@ -1339,6 +1339,7 @@ function presentationRestart(
     previous === null ||
     previous.chatExpansion.alwaysExpandTables !== chatExpansion.alwaysExpandTables ||
     previous.chatExpansion.alwaysExpandThoughts !== chatExpansion.alwaysExpandThoughts ||
+    previous.chatExpansion.commandExpansion !== chatExpansion.commandExpansion ||
     previous.chatExpansion.autoCollapseCompletedTurns !==
       chatExpansion.autoCollapseCompletedTurns ||
     !setsEqual(previous.collapsedRunIds, collapsedRunIds) ||
@@ -1368,14 +1369,31 @@ export function deriveThreadFeedPresentation(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
   expandedRunIds: ReadonlySet<RunId>,
-  expandedWorkGroupIds: ReadonlySet<string> = new Set(),
+  manuallyExpandedWorkGroupIds: ReadonlySet<string> = new Set(),
   activeWorkStartedAt: string | null = null,
   runlessWorkActive = false,
   cache?: ThreadFeedCache,
   chatExpansion: ChatExpansionSettings = DEFAULT_CLIENT_SETTINGS,
   collapsedRunIds: ReadonlySet<RunId> = new Set(),
   expandedWorkEntryIds: ReadonlySet<string> = new Set(),
+  collapsedWorkGroupIds: ReadonlySet<string> = new Set(),
 ): ThreadFeedEntry[] {
+  const expandedWorkGroupIds = new Set(manuallyExpandedWorkGroupIds);
+  if (chatExpansion.commandExpansion !== "collapsed") {
+    for (const entry of feed) {
+      if (entry.type !== "activity-group") continue;
+      const anchors = activityGroupAnchors(
+        entry,
+        chatExpansion.alwaysExpandThoughts,
+        expandedWorkEntryIds,
+      );
+      for (const activity of entry.activities) {
+        if (!activity.toolLike || activity.workEntry.itemType === "reasoning") continue;
+        const groupId = `work-group:${anchors.get(activity.id) ?? activity.id}`;
+        if (!collapsedWorkGroupIds.has(groupId)) expandedWorkGroupIds.add(groupId);
+      }
+    }
+  }
   const turnExpanded = (runId: RunId) =>
     expandedRunIds.has(runId) ||
     (!chatExpansion.autoCollapseCompletedTurns && !collapsedRunIds.has(runId));
@@ -1475,6 +1493,9 @@ export function deriveThreadFeedPresentation(
                   (activity) =>
                     (chatExpansion.alwaysExpandThoughts &&
                       activity.workEntry.itemType === "reasoning") ||
+                    (chatExpansion.commandExpansion !== "collapsed" &&
+                      activity.toolLike &&
+                      activity.workEntry.itemType !== "reasoning") ||
                     expandedWorkEntryIds.has(activity.id) ||
                     expandedWorkGroupIds.has(
                       `work-group:${anchors.get(activity.id) ?? activity.id}`,
@@ -1523,6 +1544,7 @@ export function deriveThreadFeedPresentation(
       const loadDeferredWork =
         fold.deferredWorkItemIds?.length &&
         (chatExpansion.alwaysExpandThoughts ||
+          chatExpansion.commandExpansion !== "collapsed" ||
           [...fold.hiddenEntryIds].some((entryId) => visibleWorkActivitiesByGroup.has(entryId))) &&
         !collapsedRunIds.has(fold.runId)
           ? true

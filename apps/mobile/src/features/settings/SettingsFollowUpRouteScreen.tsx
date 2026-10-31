@@ -48,6 +48,36 @@ export function SettingsFollowUpRouteScreen() {
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
     >
       <SettingsSection title="Message expansion">
+        <Text className="px-2 text-sm text-foreground-muted">Default command expansion</Text>
+        <Text className="px-2 text-sm text-foreground-muted">
+          Choose the default expansion level. You can still expand or collapse commands while
+          viewing a conversation.
+        </Text>
+        {(
+          [
+            { value: "collapsed", label: "Collapsed", description: "Show the activity summary." },
+            { value: "commands", label: "Command list", description: "Show individual commands." },
+            {
+              value: "full",
+              label: "Commands and output",
+              description: "Show exact commands and their responses.",
+            },
+          ] as const
+        ).map((option, index) => (
+          <SettingsChoiceRow
+            key={option.value}
+            label={option.label}
+            description={option.description}
+            selected={
+              AsyncResult.isSuccess(preferencesResult) &&
+              (preferencesResult.value.commandExpansion ??
+                DEFAULT_CLIENT_SETTINGS.commandExpansion) === option.value
+            }
+            separated={index > 0}
+            disabled={!preferencesReady}
+            onPress={() => savePreferences({ commandExpansion: option.value })}
+          />
+        ))}
         {(
           [
             {

@@ -82,7 +82,10 @@ import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  resolveViewedImageAsset,
+  workEntryExpandedByDefault,
+} from "@t3tools/client-runtime/work-log/presentation";
 import {
   renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
@@ -236,7 +239,10 @@ import {
   type ThreadFeedRow,
 } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
-import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+import {
+  resolveThreadFeedFixedItemSize,
+  threadWorkLogNeedsMeasurement,
+} from "./thread-feed-item-size";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
@@ -1594,6 +1600,7 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly alwaysExpandThoughts: boolean;
+    readonly commandExpansion: ChatExpansionSettings["commandExpansion"];
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -2244,6 +2251,7 @@ function renderFeedEntry(
       copiedRowId={props.copiedRowId}
       expandedRows={props.expandedWorkRows}
       alwaysExpandThoughts={props.alwaysExpandThoughts}
+      commandExpansion={props.commandExpansion}
       rowSizing={props.workRowSizing}
       scrollPositions={props.workGroupScrollPositions}
       iconSubtleColor={iconSubtleColor}
@@ -2525,6 +2533,11 @@ function useThreadFeedPresentation(
           .filter(([, expanded]) => expanded)
           .map(([entryId]) => entryId),
       ),
+      new Set(
+        Object.entries(expandedWorkGroups)
+          .filter(([, expanded]) => !expanded)
+          .map(([groupId]) => groupId),
+      ),
     ),
     props.feed,
     props.queuedMessages,
@@ -2543,6 +2556,8 @@ export const ThreadFeed = memo(function ThreadFeed({
       storedPreferences?.alwaysExpandTables ?? DEFAULT_CLIENT_SETTINGS.alwaysExpandTables,
     alwaysExpandThoughts:
       storedPreferences?.alwaysExpandThoughts ?? DEFAULT_CLIENT_SETTINGS.alwaysExpandThoughts,
+    commandExpansion:
+      storedPreferences?.commandExpansion ?? DEFAULT_CLIENT_SETTINGS.commandExpansion,
     autoCollapseCompletedTurns:
       storedPreferences?.autoCollapseCompletedTurns ??
       DEFAULT_CLIENT_SETTINGS.autoCollapseCompletedTurns,
@@ -3085,6 +3100,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
     alwaysExpandThoughts: chatExpansion.alwaysExpandThoughts,
+    commandExpansion: chatExpansion.commandExpansion,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
@@ -3426,7 +3442,9 @@ export const ThreadFeed = memo(function ThreadFeed({
       ...current,
       expandedWorkGroups: {
         ...current.expandedWorkGroups,
-        [groupId]: !(current.expandedWorkGroups[groupId] ?? false),
+        [groupId]: !presentedFeed.some(
+          (entry) => entry.type === "work-toggle" && entry.groupId === groupId && entry.expanded,
+        ),
       },
     }));
   };
@@ -3437,14 +3455,15 @@ export const ThreadFeed = memo(function ThreadFeed({
     setDisclosures((current) => {
       const expanded = !(
         current.expandedWorkRows[rowId] ??
-        (chatExpansion.alwaysExpandThoughts &&
-          presentedFeed.some(
-            (entry) =>
-              entry.type === "activity-group" &&
-              entry.activities.some(
-                (activity) => activity.id === rowId && activity.workEntry.itemType === "reasoning",
-              ),
-          ))
+        presentedFeed.some(
+          (entry) =>
+            entry.type === "activity-group" &&
+            entry.activities.some(
+              (activity) =>
+                activity.id === rowId &&
+                workEntryExpandedByDefault(activity.workEntry, chatExpansion),
+            ),
+        )
       );
       return {
         ...current,
@@ -3510,14 +3529,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         ) {
           return undefined;
         }
-        return entry.activities.some(
-          (activity) =>
-            activity.prominent ||
-            expandedWorkRows[activity.id] ||
-            (expandedWorkRows[activity.id] === undefined &&
-              chatExpansion.alwaysExpandThoughts &&
-              activity.workEntry.itemType === "reasoning"),
-        )
+        return threadWorkLogNeedsMeasurement(entry.activities, expandedWorkRows, chatExpansion)
           ? undefined
           : collapsedWorkLogHeight(entry.activities, entry.continuesWorkLog);
       default:
@@ -3565,6 +3577,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             copiedRowId,
             expandedWorkRows,
             alwaysExpandThoughts: chatExpansion.alwaysExpandThoughts,
+            commandExpansion: chatExpansion.commandExpansion,
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,

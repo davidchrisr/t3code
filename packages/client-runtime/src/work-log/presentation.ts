@@ -22,6 +22,7 @@ import { isWorkspaceImagePreviewPath } from "@t3tools/shared/mediaPreview";
 import { formatTokens } from "@t3tools/shared/usageFormat";
 import { classifyToolActivity } from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
+import type { ChatExpansionSettings } from "@t3tools/contracts/settings";
 
 import {
   summarizeT3ToolCalls,
@@ -253,6 +254,15 @@ function workLogEntryIsToolLike(entry: WorkLogPresentationEntry): boolean {
   if (entry.command !== undefined && entry.command.trim().length > 0) return true;
   if (entry.requestKind !== undefined) return true;
   return entry.itemType !== undefined && isToolLifecycleItemType(entry.itemType);
+}
+
+export function workEntryExpandedByDefault(
+  entry: WorkLogPresentationEntry,
+  settings: Pick<ChatExpansionSettings, "alwaysExpandThoughts" | "commandExpansion">,
+): boolean {
+  return entry.itemType === "reasoning"
+    ? settings.alwaysExpandThoughts
+    : settings.commandExpansion === "full" && workLogEntryIsToolLike(entry);
 }
 
 function workEntryIndicatesToolFailureFromOutput(
