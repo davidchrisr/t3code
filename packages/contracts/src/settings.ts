@@ -474,6 +474,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   alwaysExpandTables: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   alwaysExpandThoughts: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  commandExpansion: Schema.Literals(["collapsed", "commands", "full"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("commands")),
+  ),
   autoCollapseCompletedTurns: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -532,7 +535,7 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export type ChatExpansionSettings = Pick<
   ClientSettings,
-  "alwaysExpandTables" | "alwaysExpandThoughts" | "autoCollapseCompletedTurns"
+  "alwaysExpandTables" | "alwaysExpandThoughts" | "commandExpansion" | "autoCollapseCompletedTurns"
 >;
 
 export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
@@ -1809,6 +1812,7 @@ export const ClientSettingsPatch = Schema.Struct({
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
   alwaysExpandTables: Schema.optionalKey(Schema.Boolean),
   alwaysExpandThoughts: Schema.optionalKey(Schema.Boolean),
+  commandExpansion: Schema.optionalKey(Schema.Literals(["collapsed", "commands", "full"])),
   autoCollapseCompletedTurns: Schema.optionalKey(Schema.Boolean),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),

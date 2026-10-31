@@ -1,4 +1,6 @@
 import { Button } from "../../components/ui/Button";
+import type { ChatExpansionSettings } from "@t3tools/contracts/settings";
+import { workEntryExpandedByDefault } from "@t3tools/client-runtime/work-log/presentation";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import {
@@ -475,6 +477,7 @@ interface ThreadWorkLogProps {
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly alwaysExpandThoughts: boolean;
+  readonly commandExpansion: ChatExpansionSettings["commandExpansion"];
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
   readonly iconSubtleColor: ColorValue;
@@ -495,10 +498,7 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       row={row}
       anchorKey={props.anchorKey}
       copied={props.copiedRowId === row.id}
-      expanded={
-        props.expandedRows[row.id] ??
-        (props.alwaysExpandThoughts && row.workEntry.itemType === "reasoning")
-      }
+      expanded={props.expandedRows[row.id] ?? workEntryExpandedByDefault(row.workEntry, props)}
       environmentId={props.environmentId}
       iconSubtleColor={props.iconSubtleColor}
       onCopyRow={props.onCopyRow}
@@ -552,6 +552,8 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
           activities={props.activities}
           edgeFadeColor={props.edgeFadeColor}
           expandedRows={props.expandedRows}
+          alwaysExpandThoughts={props.alwaysExpandThoughts}
+          commandExpansion={props.commandExpansion}
           groupId={props.anchorKey}
           rowSizing={props.rowSizing}
           scrollPositions={props.scrollPositions}
@@ -617,6 +619,8 @@ function ThreadWorkGroupList(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly edgeFadeColor: string;
   readonly expandedRows: Readonly<Record<string, boolean>>;
+  readonly alwaysExpandThoughts: boolean;
+  readonly commandExpansion: ChatExpansionSettings["commandExpansion"];
   readonly groupId: string;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
@@ -642,6 +646,8 @@ function ThreadWorkGroupList(props: {
     rows: props.activities,
     height: Math.max(estimatedRowsHeight, initialPosition?.contentHeight ?? 0),
     expandedRows: props.expandedRows,
+    alwaysExpandThoughts: props.alwaysExpandThoughts,
+    commandExpansion: props.commandExpansion,
   });
   const [measuredContent, setMeasuredContent] = useState(() => ({
     height: Math.max(estimatedRowsHeight, initialPosition?.contentHeight ?? 0),
@@ -693,7 +699,10 @@ function ThreadWorkGroupList(props: {
   // committed rows before those effects run, unlike a parent layout-effect ref.
   const onContentSizeChange = useEffectEvent((nextHeight: number) => {
     const previous = previousContent.current;
-    const detailsChanged = previous.expandedRows !== props.expandedRows;
+    const detailsChanged =
+      previous.expandedRows !== props.expandedRows ||
+      previous.alwaysExpandThoughts !== props.alwaysExpandThoughts ||
+      previous.commandExpansion !== props.commandExpansion;
     const followAppend =
       loadedRef.current &&
       shouldFollowThreadWorkGroupAppend({
@@ -710,6 +719,8 @@ function ThreadWorkGroupList(props: {
       rows: props.activities,
       height: nextHeight,
       expandedRows: props.expandedRows,
+      alwaysExpandThoughts: props.alwaysExpandThoughts,
+      commandExpansion: props.commandExpansion,
     };
     setMeasuredContent((current) =>
       current.height === nextHeight && current.rowCount === props.activities.length
@@ -739,7 +750,8 @@ function ThreadWorkGroupList(props: {
     return unsubscribe;
   }, []);
   const getFixedItemSize = (row: ThreadFeedActivity, index: number) =>
-    props.expandedRows[row.id] || props.rowSizing.fixedRowHeight === undefined
+    (props.expandedRows[row.id] ?? workEntryExpandedByDefault(row.workEntry, props)) ||
+    props.rowSizing.fixedRowHeight === undefined
       ? undefined
       : props.rowSizing.fixedRowHeight + (index < props.activities.length - 1 ? WORK_ROW_GAP : 0);
   const renderItem = ({ item, index }: { item: ThreadFeedActivity; index: number }) => (
@@ -919,6 +931,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     | "edgeFadeColor"
     | "expandedRows"
     | "alwaysExpandThoughts"
+    | "commandExpansion"
     | "rowSizing"
     | "scrollPositions"
   > & {

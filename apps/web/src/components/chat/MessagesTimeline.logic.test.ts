@@ -37,6 +37,7 @@ import {
 const COLLAPSED_CHAT_SETTINGS = {
   alwaysExpandTables: false,
   alwaysExpandThoughts: false,
+  commandExpansion: "collapsed" as const,
   autoCollapseCompletedTurns: true,
 };
 
@@ -129,14 +130,17 @@ describe("deriveMessagesTimelineRows", () => {
       byId: new Map<string, MessagesTimelineRow>(),
       result: [] as MessagesTimelineRow[],
     };
-    for (const [alwaysExpandThoughts, manuallyCollapsed] of [
-      [false, false],
-      [true, false],
-      [true, true],
+    for (const [alwaysExpandThoughts, manuallyCollapsed, commandExpansion] of [
+      [false, false, "collapsed"],
+      [true, false, "collapsed"],
+      [true, true, "collapsed"],
+      [false, false, "commands"],
+      [false, false, "full"],
+      [false, true, "full"],
     ] as const) {
       const options = {
         ...input,
-        chatExpansion: { ...COLLAPSED_CHAT_SETTINGS, alwaysExpandThoughts },
+        chatExpansion: { ...COLLAPSED_CHAT_SETTINGS, alwaysExpandThoughts, commandExpansion },
         collapsedRunIds: new Set(manuallyCollapsed ? [fixture.runId] : []),
       };
       const deferred = deriveMessagesTimelineRows({
@@ -149,7 +153,7 @@ describe("deriveMessagesTimelineRows", () => {
       stable = computeStableMessagesTimelineRows(deferred, stable);
       const fold = stable.result.find((row) => row.kind === "turn-fold");
       expect(fold).toMatchObject({ expanded: false, deferredWorkItemIds: [first.sourceItemId] });
-      if (alwaysExpandThoughts && !manuallyCollapsed)
+      if ((alwaysExpandThoughts || commandExpansion !== "collapsed") && !manuallyCollapsed)
         expect(fold).toMatchObject({ loadDeferredWork: true });
       else expect(fold).not.toHaveProperty("loadDeferredWork", true);
 
@@ -160,11 +164,17 @@ describe("deriveMessagesTimelineRows", () => {
           optimisticMessages: [],
         }),
       });
-      expect(
-        loaded
-          .filter((row) => row.kind === "work")
-          .flatMap((row) => row.groupedEntries.map((entry) => entry.detail)),
-      ).toEqual(alwaysExpandThoughts && !manuallyCollapsed ? ["Deferred thought"] : []);
+      const loadedWork = loaded
+        .filter((row) => row.kind === "work")
+        .flatMap((row) => row.groupedEntries);
+      if (commandExpansion === "collapsed") {
+        expect(loadedWork.map((entry) => entry.detail)).toEqual(
+          alwaysExpandThoughts && !manuallyCollapsed ? ["Deferred thought"] : [],
+        );
+      }
+      expect(loadedWork.filter((entry) => entry.itemType === "command_execution")).toHaveLength(
+        commandExpansion !== "collapsed" && !manuallyCollapsed ? 150 : 0,
+      );
       expect(loaded.find((row) => row.kind === "turn-fold")).toMatchObject({ expanded: false });
     }
     const deferredEntries = deriveTimelineEntriesFromVisibleTurnItems({
@@ -1160,6 +1170,7 @@ describe("deriveMessagesTimelineRows", () => {
     const chatExpansion = {
       alwaysExpandTables: false,
       alwaysExpandThoughts: false,
+      commandExpansion: "collapsed" as const,
       autoCollapseCompletedTurns: false,
     };
     expect(deriveMessagesTimelineRows(input).map((row) => row.id)).toEqual(
@@ -1244,6 +1255,7 @@ describe("deriveMessagesTimelineRows", () => {
         ...chatExpansion,
         autoCollapseCompletedTurns: true,
         alwaysExpandThoughts: true,
+        commandExpansion: "collapsed" as const,
       },
     });
     expect(thoughtRows.map((row) => row.id)).toEqual([
@@ -1320,6 +1332,7 @@ describe("deriveMessagesTimelineRows", () => {
             ...COLLAPSED_CHAT_SETTINGS,
             autoCollapseCompletedTurns: false,
             alwaysExpandThoughts,
+            commandExpansion: "collapsed" as const,
           },
           expandedWorkEntryIds: new Set(["work-1"]),
         },
@@ -3279,6 +3292,7 @@ describe("v2 run and attempt history", () => {
         chatExpansion: {
           alwaysExpandTables: true,
           alwaysExpandThoughts: true,
+          commandExpansion: "collapsed" as const,
           autoCollapseCompletedTurns,
         },
       };

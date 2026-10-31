@@ -17,6 +17,7 @@ import {
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
+import type { ChatExpansionSettings } from "@t3tools/contracts/settings";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
@@ -113,6 +114,7 @@ export interface Preferences {
   readonly followUpBehavior?: FollowUpBehavior;
   readonly alwaysExpandTables?: boolean;
   readonly alwaysExpandThoughts?: boolean;
+  readonly commandExpansion?: ChatExpansionSettings["commandExpansion"];
   readonly autoCollapseCompletedTurns?: boolean;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
@@ -196,6 +198,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     followUpBehavior?: FollowUpBehavior;
     alwaysExpandTables?: boolean;
     alwaysExpandThoughts?: boolean;
+    commandExpansion?: ChatExpansionSettings["commandExpansion"];
     autoCollapseCompletedTurns?: boolean;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
@@ -283,6 +286,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.alwaysExpandTables = parsed.alwaysExpandTables;
   if (typeof parsed.alwaysExpandThoughts === "boolean")
     preferences.alwaysExpandThoughts = parsed.alwaysExpandThoughts;
+  if (
+    parsed.commandExpansion === "collapsed" ||
+    parsed.commandExpansion === "commands" ||
+    parsed.commandExpansion === "full"
+  )
+    preferences.commandExpansion = parsed.commandExpansion;
   if (typeof parsed.autoCollapseCompletedTurns === "boolean")
     preferences.autoCollapseCompletedTurns = parsed.autoCollapseCompletedTurns;
   if (typeof parsed.mathRenderingEnabled === "boolean")

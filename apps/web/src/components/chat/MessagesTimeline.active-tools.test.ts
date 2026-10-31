@@ -3,14 +3,25 @@ import { describe, expect, it } from "vite-plus/test";
 import { deriveMessagesTimelineRows, liveWorkEntryLabel } from "./MessagesTimeline.logic";
 
 describe("long active tool groups", () => {
-  it.each([
-    { expanded: false, alwaysExpandThoughts: false },
-    { expanded: true, alwaysExpandThoughts: false },
-    { expanded: false, alwaysExpandThoughts: true },
-    { expanded: true, alwaysExpandThoughts: true },
-  ])(
+  it.each(
+    [
+      { expanded: false, alwaysExpandThoughts: false },
+      { expanded: true, alwaysExpandThoughts: false },
+      { expanded: false, alwaysExpandThoughts: true },
+      { expanded: true, alwaysExpandThoughts: true },
+    ].flatMap((state) =>
+      (["collapsed", "commands", "full"] as const).flatMap((commandExpansion) =>
+        [false, true].map((manuallyCollapsed) => ({
+          ...state,
+          commandExpansion,
+          manuallyCollapsed,
+        })),
+      ),
+    ),
+  )(
     "preserves chronological order and the latest activity, %j",
-    ({ expanded, alwaysExpandThoughts }) => {
+    ({ expanded, alwaysExpandThoughts, commandExpansion, manuallyCollapsed }) => {
+      const shouldExpand = expanded || (commandExpansion !== "collapsed" && !manuallyCollapsed);
       const runId = RunId.make("long-active-run");
       const createdAt = "2026-10-12T00:00:00Z";
       const timelineEntries = Array.from({ length: 1_000 }, (_, index) => ({
@@ -32,6 +43,7 @@ describe("long active tool groups", () => {
         chatExpansion: {
           alwaysExpandTables: false,
           alwaysExpandThoughts,
+          commandExpansion,
           autoCollapseCompletedTurns: true,
         },
         timelineEntries,
@@ -40,6 +52,9 @@ describe("long active tool groups", () => {
         activeTurnStartedAt: createdAt,
         turnDiffSummaries: [],
         supportsConversationRollback: false,
+        collapsedWorkGroupIds: new Set(
+          manuallyCollapsed ? [`work-group:work-entry-${alwaysExpandThoughts ? 999 : 0}`] : [],
+        ),
         expandedWorkGroupIds: new Set(
           expanded ? [`work-group:work-entry-${alwaysExpandThoughts ? 999 : 0}`] : [],
         ),
@@ -57,9 +72,9 @@ describe("long active tool groups", () => {
       expect(live?.groupId).toBe(`work-group:work-entry-${alwaysExpandThoughts ? 999 : 0}`);
       const details = rows.filter((row) => row.kind === "work");
       expect(details).toHaveLength(
-        alwaysExpandThoughts ? 999 + Number(expanded) : Number(expanded),
+        alwaysExpandThoughts ? 999 + Number(shouldExpand) : Number(shouldExpand),
       );
-      if (expanded) {
+      if (shouldExpand) {
         expect(details.at(-1)?.groupedEntries).toEqual(live?.groupedEntries);
       }
       expect(

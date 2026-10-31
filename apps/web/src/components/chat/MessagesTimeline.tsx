@@ -156,6 +156,8 @@ function timelineListStateFor(identity: string): {
     workGroupViewState: rememberedPosition?.disclosures?.workGroupState ?? {
       scrollPositions: new Map(),
       expandedEntries: new Set(),
+      collapsedEntries: new Set(),
+      collapsedGroups: new Set(),
     },
   };
 }
@@ -416,6 +418,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const chatExpansion = useClientSettings((settings) => ({
     alwaysExpandTables: settings.alwaysExpandTables,
     alwaysExpandThoughts: settings.alwaysExpandThoughts,
+    commandExpansion: settings.commandExpansion,
     autoCollapseCompletedTurns: settings.autoCollapseCompletedTurns,
   }));
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
@@ -559,9 +562,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
     suspendEndScrollMaintenanceForDisclosure(anchorKey);
+    const expanded = rawRows.some(
+      (row) =>
+        (row.kind === "work-toggle" || row.kind === "work-live" || row.kind === "thinking") &&
+        row.groupId === groupId &&
+        row.expanded,
+    );
+    const collapsedGroups = workGroupViewState.collapsedGroups;
+    if (expanded) collapsedGroups.add(groupId);
+    else collapsedGroups.delete(groupId);
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
-      if (next.has(groupId)) {
+      if (expanded) {
         next.delete(groupId);
       } else {
         next.add(groupId);
@@ -717,7 +729,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     chatExpansion,
     expandedAttemptIds: visibleExpandedAttemptIds,
     collapsedAttemptIds: paintedCollapsedAttemptIds,
-    expandedWorkGroupIds,
+    expandedWorkGroupIds: paintedExpandedWorkGroupIds,
+    collapsedWorkGroupIds: new Set(workGroupViewState.collapsedGroups),
     expandedWorkEntryIds: new Set(workGroupViewState.expandedEntries),
     isWorking,
     runlessWorkActive,

@@ -9,7 +9,42 @@ import {
   type WorkLogPresentationEntry,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
+  workEntryExpandedByDefault,
 } from "./presentation.js";
+
+describe("workEntryExpandedByDefault", () => {
+  it.each(["collapsed", "commands", "full"] as const)(
+    "opens tool details only at full expansion with %s selected",
+    (commandExpansion) => {
+      const entry: WorkLogPresentationEntry = {
+        id: "tool",
+        createdAt: "2026-01-01T00:00:00Z",
+        label: "Run command",
+        tone: "tool",
+        itemType: "command_execution",
+      };
+      for (const alwaysExpandThoughts of [false, true]) {
+        const settings = { commandExpansion, alwaysExpandThoughts };
+        expect(workEntryExpandedByDefault(entry, settings)).toBe(commandExpansion === "full");
+        expect(workEntryExpandedByDefault({ ...entry, itemType: "dynamic_tool" }, settings)).toBe(
+          commandExpansion === "full",
+        );
+        expect(
+          workEntryExpandedByDefault(
+            { ...entry, tone: "thinking", itemType: "reasoning" },
+            settings,
+          ),
+        ).toBe(alwaysExpandThoughts);
+        expect(
+          workEntryExpandedByDefault(
+            { ...entry, tone: "info", itemType: "notification" },
+            settings,
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+});
 
 function commandItem(
   fields: Partial<Extract<OrchestrationV2TurnItem, { type: "command_execution" }>> = {},

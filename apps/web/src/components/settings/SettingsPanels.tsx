@@ -506,6 +506,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.alwaysExpandThoughts !== DEFAULT_UNIFIED_SETTINGS.alwaysExpandThoughts
       ? ["Always expand thoughts"]
       : []),
+    ...(settings.commandExpansion !== DEFAULT_UNIFIED_SETTINGS.commandExpansion
+      ? ["Default command expansion"]
+      : []),
     ...(settings.autoCollapseCompletedTurns !== DEFAULT_UNIFIED_SETTINGS.autoCollapseCompletedTurns
       ? ["Automatically collapse completed turns"]
       : []),
@@ -627,6 +630,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       alwaysExpandTables: DEFAULT_UNIFIED_SETTINGS.alwaysExpandTables,
       alwaysExpandThoughts: DEFAULT_UNIFIED_SETTINGS.alwaysExpandThoughts,
+      commandExpansion: DEFAULT_UNIFIED_SETTINGS.commandExpansion,
       autoCollapseCompletedTurns: DEFAULT_UNIFIED_SETTINGS.autoCollapseCompletedTurns,
       sendShortcut: defaultSendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
@@ -1074,6 +1078,55 @@ export function ChatSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="message-expansion" title="Message expansion">
+        <SettingsRow
+          {...searchableSetting("command-expansion")}
+          description="Choose the default expansion level. You can still expand or collapse commands while viewing a conversation."
+          resetAction={
+            settings.commandExpansion !== DEFAULT_UNIFIED_SETTINGS.commandExpansion ? (
+              <SettingResetButton
+                label="default command expansion"
+                onClick={() =>
+                  updateSettings({ commandExpansion: DEFAULT_UNIFIED_SETTINGS.commandExpansion })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.commandExpansion}
+              onValueChange={(value) => {
+                if (value === "collapsed" || value === "commands" || value === "full") {
+                  updateSettings({ commandExpansion: value });
+                }
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-48"
+                aria-label="Default command expansion"
+              >
+                <SelectValue>
+                  {settings.commandExpansion === "collapsed"
+                    ? "Collapsed"
+                    : settings.commandExpansion === "commands"
+                      ? "Command list"
+                      : "Commands and output"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="collapsed">
+                  Collapsed
+                </SelectItem>
+                <SelectItem hideIndicator value="commands">
+                  Command list
+                </SelectItem>
+                <SelectItem hideIndicator value="full">
+                  Commands and output
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
         {(
           [
             {

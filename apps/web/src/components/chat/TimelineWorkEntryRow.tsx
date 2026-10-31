@@ -18,6 +18,7 @@ import {
   resolveViewedImageAsset,
   toolGroupAction,
   workEntryViewedImagePath,
+  workEntryExpandedByDefault,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
   turnItemHasDetail,
@@ -189,14 +190,17 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const groupView = use(WorkGroupViewCtx);
   const viewState = ctx.workGroupViewState;
   const alwaysExpandThoughts = useClientSettings((settings) => settings.alwaysExpandThoughts);
+  const commandExpansion = useClientSettings((settings) => settings.commandExpansion);
   const [expandedOverride, setExpanded] = useState<boolean | undefined>(() =>
     viewState.expandedEntries.has(workEntry.id)
       ? true
-      : viewState.collapsedEntries?.has(workEntry.id)
+      : viewState.collapsedEntries.has(workEntry.id)
         ? false
         : undefined,
   );
-  const expanded = expandedOverride ?? (alwaysExpandThoughts && workEntry.itemType === "reasoning");
+  const expanded =
+    expandedOverride ??
+    workEntryExpandedByDefault(workEntry, { alwaysExpandThoughts, commandExpansion });
   const toggleExpanded = () => {
     const next = !expanded;
     if (groupView) {
@@ -206,7 +210,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     }
     if (next) viewState.expandedEntries.add(workEntry.id);
     else viewState.expandedEntries.delete(workEntry.id);
-    const collapsedEntries = (viewState.collapsedEntries ??= new Set());
+    const collapsedEntries = viewState.collapsedEntries;
     if (next) collapsedEntries.delete(workEntry.id);
     else collapsedEntries.add(workEntry.id);
     setExpanded(next);
