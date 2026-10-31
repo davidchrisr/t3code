@@ -31,6 +31,7 @@ import {
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
+import { useClientSettings } from "../../hooks/useSettings";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import { ChevronRightIcon, CircleAlertIcon, XIcon, RotateCcwIcon } from "lucide-react";
 import { Button, InlineButton } from "../ui/button";
@@ -184,18 +185,28 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       ? notificationChildThreadId(workEntry.projectedItem.item.source)
       : undefined;
   const groupView = use(WorkGroupViewCtx);
-  const [expanded, setExpanded] = useState(
-    () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
+  const viewState = ctx.workGroupViewState;
+  const alwaysExpandThoughts = useClientSettings((settings) => settings.alwaysExpandThoughts);
+  const [expandedOverride, setExpanded] = useState<boolean | undefined>(() =>
+    viewState.expandedEntries.has(workEntry.id)
+      ? true
+      : viewState.collapsedEntries?.has(workEntry.id)
+        ? false
+        : undefined,
   );
+  const expanded = expandedOverride ?? (alwaysExpandThoughts && workEntry.itemType === "reasoning");
   const toggleExpanded = () => {
     const next = !expanded;
     if (groupView) {
       groupView.onToggleEntry(!next);
-      if (next) groupView.state.expandedEntries.add(workEntry.id);
-      else groupView.state.expandedEntries.delete(workEntry.id);
     } else {
       props.onToggleEntry?.(!next);
     }
+    if (next) viewState.expandedEntries.add(workEntry.id);
+    else viewState.expandedEntries.delete(workEntry.id);
+    const collapsedEntries = (viewState.collapsedEntries ??= new Set());
+    if (next) collapsedEntries.delete(workEntry.id);
+    else collapsedEntries.add(workEntry.id);
     setExpanded(next);
   };
   const failureItem = workEntry.projectedItem?.item;

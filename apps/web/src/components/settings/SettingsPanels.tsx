@@ -508,6 +508,15 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
       ? ["Rich text composer"]
       : []),
+    ...(settings.alwaysExpandTables !== DEFAULT_UNIFIED_SETTINGS.alwaysExpandTables
+      ? ["Always expand Markdown tables"]
+      : []),
+    ...(settings.alwaysExpandThoughts !== DEFAULT_UNIFIED_SETTINGS.alwaysExpandThoughts
+      ? ["Always expand thoughts"]
+      : []),
+    ...(settings.autoCollapseCompletedTurns !== DEFAULT_UNIFIED_SETTINGS.autoCollapseCompletedTurns
+      ? ["Automatically collapse completed turns"]
+      : []),
     ...(settings.sendShortcut !== defaultSendShortcut ? ["Send shortcut"] : []),
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? ["Follow-up behavior"]
@@ -624,6 +633,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
+      alwaysExpandTables: DEFAULT_UNIFIED_SETTINGS.alwaysExpandTables,
+      alwaysExpandThoughts: DEFAULT_UNIFIED_SETTINGS.alwaysExpandThoughts,
+      autoCollapseCompletedTurns: DEFAULT_UNIFIED_SETTINGS.autoCollapseCompletedTurns,
       sendShortcut: defaultSendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
@@ -1069,6 +1081,54 @@ export function ChatSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection id="message-expansion" title="Message expansion">
+        {(
+          [
+            {
+              key: "alwaysExpandTables",
+              id: "always-expand-tables",
+              label: "Always expand Markdown tables",
+              description:
+                "Keep messages containing Markdown tables visible when completed turns automatically collapse.",
+            },
+            {
+              key: "alwaysExpandThoughts",
+              id: "always-expand-thoughts",
+              label: "Always expand thoughts",
+              description:
+                "Show live and completed thoughts in full, even when completed turns automatically collapse.",
+            },
+            {
+              key: "autoCollapseCompletedTurns",
+              id: "auto-collapse-completed-turns",
+              label: "Automatically collapse completed turns",
+              description:
+                "Fold earlier messages and activity when a turn finishes. Manual expansion and collapse choices are preserved.",
+            },
+          ] as const
+        ).map(({ key, id, label, description }) => (
+          <SettingsRow
+            key={key}
+            {...searchableSetting(id)}
+            description={description}
+            resetAction={
+              settings[key] !== DEFAULT_UNIFIED_SETTINGS[key] ? (
+                <SettingResetButton
+                  label={label}
+                  onClick={() => updateSettings({ [key]: DEFAULT_UNIFIED_SETTINGS[key] })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings[key]}
+                onCheckedChange={(checked) => updateSettings({ [key]: Boolean(checked) })}
+                aria-label={label}
+              />
+            }
+          />
+        ))}
+      </SettingsSection>
       <SettingsSection id="composer" title="Composer">
         <SettingsRow
           {...searchableSetting("composer-rich-text")}

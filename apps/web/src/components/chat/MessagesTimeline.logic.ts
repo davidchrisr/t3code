@@ -64,6 +64,8 @@ import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
 import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
 import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@t3tools/shared/htmlRender";
+import { chatMessageHasMarkdownTable } from "@t3tools/shared/markdownPipeline";
+import { DEFAULT_CLIENT_SETTINGS, type ChatExpansionSettings } from "@t3tools/contracts/settings";
 import { mcpAppReferencesEqual, type McpAppReference } from "@t3tools/shared/mcpApp";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
@@ -554,6 +556,7 @@ type MessagesTimelineRowContent =
   | {
       kind: "turn-fold";
       deferredWorkItemIds?: ReadonlyArray<string>;
+      loadDeferredWork?: true;
       id: string;
       createdAt: string;
       runId: RunId;
@@ -563,6 +566,7 @@ type MessagesTimelineRowContent =
   | {
       kind: "attempt-fold";
       deferredWorkItemIds?: ReadonlyArray<string>;
+      loadDeferredWork?: true;
       id: string;
       createdAt: string;
       runId: RunId;
@@ -1389,8 +1393,12 @@ export function deriveMessagesTimelineRows(input: {
   latestRun?: TimelineLatestRun | null;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
+  collapsedRunIds?: ReadonlySet<RunId>;
+  chatExpansion?: ChatExpansionSettings;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
+  collapsedAttemptIds?: ReadonlySet<RunAttemptId>;
   expandedWorkGroupIds?: ReadonlySet<string>;
+  expandedWorkEntryIds?: ReadonlySet<string>;
   isWorking: boolean;
   /** Native subagent work has no app run; runless entries form the live response. */
   runlessWorkActive?: boolean;
@@ -1401,6 +1409,10 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
+  const chatExpansion = input.chatExpansion ?? DEFAULT_CLIENT_SETTINGS;
+  const turnExpanded = (runId: RunId) =>
+    input.expandedRunIds?.has(runId) === true ||
+    (!chatExpansion.autoCollapseCompletedTurns && !input.collapsedRunIds?.has(runId));
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   const isPendingApproval = (entry: WorkLogEntry) => {
     const item = entry.projectedItem?.item;
@@ -1429,6 +1441,20 @@ export function deriveMessagesTimelineRows(input: {
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const itemizedRunIds = itemizedFailedRunIds(timelineEntries, failedRunIds);
+  const thoughtHasOwnRow = (entry: WorkLogEntry) =>
+    entry.itemType === "reasoning" &&
+    (chatExpansion.alwaysExpandThoughts || input.expandedWorkEntryIds?.has(entry.id) === true);
+  const workEntryHasOwnRow = (entry: WorkLogEntry) =>
+    thoughtHasOwnRow(entry) ||
+    isPendingApproval(entry) ||
+    (entry.runId != null && itemizedRunIds.has(entry.runId)) ||
+    (entry.itemType === "error" && entry.toolLifecycleStatus === "failed") ||
+    entry.tone === "error" ||
+    entry.sourceActivityKind === "runtime.error" ||
+    entry.sourceActivityKind === "context-compaction" ||
+    entry.itemType === "system_notice" ||
+    entry.itemType === "notification" ||
+    entry.questionAnswer !== undefined;
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
   const completeSupersededReplyIds = completeSupersededReplyEntryIds(timelineEntries);
   const supersededFoldsByAnchorEntryId = deriveSupersededAttemptFolds(
@@ -1456,15 +1482,56 @@ export function deriveMessagesTimelineRows(input: {
     completeSupersededReplyEntryIds: completeSupersededReplyIds,
   });
   const timelineEntryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
+  const manuallyVisibleWorkEntryIds = new Set<string>();
+  if (input.expandedWorkGroupIds?.size) {
+    let expandedGroup: Extract<TimelineEntry, { kind: "work" }> | null = null;
+    for (const entry of timelineEntries) {
+      if (entry.kind !== "work" || workEntryHasOwnRow(entry.entry)) {
+        expandedGroup = null;
+        continue;
+      }
+      if (
+        expandedGroup &&
+        ((entry.entry.runId ?? null) !== (expandedGroup.entry.runId ?? null) ||
+          entry.attempt?.id !== expandedGroup.attempt?.id ||
+          foldsByAnchorEntryId.has(entry.id) ||
+          supersededFoldsByAnchorEntryId.has(entry.id))
+      )
+        expandedGroup = null;
+      if (input.expandedWorkGroupIds.has(workGroupId(entry.id))) expandedGroup = entry;
+      if (expandedGroup) manuallyVisibleWorkEntryIds.add(entry.id);
+    }
+  }
+  const workEntryIsManuallyVisible = (entryId: string) => {
+    if (manuallyVisibleWorkEntryIds.has(entryId)) return true;
+    const entry = timelineEntryById.get(entryId);
+    return entry?.kind === "work" && input.expandedWorkEntryIds?.has(entry.entry.id) === true;
+  };
   const collapsedEntryIds = new Set<string>();
   const collapsedFoldMemberIds = new Set<string>();
+  const entryIsKeptVisible = (entryId: string) => {
+    const entry = timelineEntryById.get(entryId);
+    return (
+      workEntryIsManuallyVisible(entryId) ||
+      (chatExpansion.alwaysExpandTables &&
+        entry?.kind === "message" &&
+        chatMessageHasMarkdownTable(entry.message)) ||
+      (chatExpansion.alwaysExpandThoughts &&
+        entry?.kind === "work" &&
+        entry.entry.itemType === "reasoning")
+    );
+  };
   for (const fold of foldsByAnchorEntryId.values()) {
-    if (!input.expandedRunIds?.has(fold.runId)) {
+    if (!turnExpanded(fold.runId)) {
+      const keepVisible = (entryId: string) => {
+        if (input.collapsedRunIds?.has(fold.runId)) return false;
+        return entryIsKeptVisible(entryId);
+      };
       for (const entryId of fold.hiddenEntryIds) {
-        collapsedEntryIds.add(entryId);
+        if (!keepVisible(entryId)) collapsedEntryIds.add(entryId);
       }
       for (const entryId of fold.entryIds) {
-        collapsedFoldMemberIds.add(entryId);
+        if (!keepVisible(entryId)) collapsedFoldMemberIds.add(entryId);
       }
     }
   }
@@ -1472,7 +1539,8 @@ export function deriveMessagesTimelineRows(input: {
   for (const fold of supersededFoldsByAnchorEntryId.values()) {
     if (!input.expandedAttemptIds?.has(fold.attemptId)) {
       for (const entryId of fold.hiddenEntryIds) {
-        collapsedSupersededEntryIds.add(entryId);
+        if (input.collapsedAttemptIds?.has(fold.attemptId) || !entryIsKeptVisible(entryId))
+          collapsedSupersededEntryIds.add(entryId);
       }
     }
   }
@@ -1522,7 +1590,11 @@ export function deriveMessagesTimelineRows(input: {
       } else if ((entry.attempt?.id ?? null) !== tailAttemptId) {
         break;
       }
-      activeToolEntries.push(entry);
+      if (!thoughtHasOwnRow(entry.entry)) {
+        activeToolEntries.push(entry);
+      } else if (workEntryIsVisibleInGroup(entry.entry, true)) {
+        break;
+      }
     }
   }
   activeToolEntries.reverse();
@@ -1713,10 +1785,16 @@ export function deriveMessagesTimelineRows(input: {
         kind: "turn-fold",
         id: `turn-fold:${turnFold.runId}`,
         ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
+        ...(deferredWorkItemIds.length > 0 &&
+        (chatExpansion.alwaysExpandThoughts ||
+          [...turnFold.entryIds].some(workEntryIsManuallyVisible)) &&
+        !input.collapsedRunIds?.has(turnFold.runId)
+          ? { loadDeferredWork: true as const }
+          : {}),
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
         label: turnFold.label,
-        expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
+        expanded: turnExpanded(turnFold.runId),
       });
     }
 
@@ -1729,6 +1807,12 @@ export function deriveMessagesTimelineRows(input: {
       nextRows.push({
         kind: "attempt-fold",
         deferredWorkItemIds: supersededFold.deferredWorkItemIds,
+        ...(supersededFold.deferredWorkItemIds.length > 0 &&
+        !input.collapsedAttemptIds?.has(supersededFold.attemptId) &&
+        (chatExpansion.alwaysExpandThoughts ||
+          [...supersededFold.hiddenEntryIds].some(workEntryIsManuallyVisible))
+          ? { loadDeferredWork: true as const }
+          : {}),
         id: `attempt-fold:${supersededFold.attemptId}`,
         createdAt: supersededFold.createdAt,
         runId: supersededFold.runId,
@@ -1789,17 +1873,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      if (
-        isPendingApproval(timelineEntry.entry) ||
-        (timelineEntry.entry.runId != null && itemizedRunIds.has(timelineEntry.entry.runId)) ||
-        (timelineEntry.entry.itemType === "error" &&
-          timelineEntry.entry.toolLifecycleStatus === "failed") ||
-        timelineEntry.entry.tone === "error" ||
-        timelineEntry.entry.sourceActivityKind === "runtime.error" ||
-        timelineEntry.entry.itemType === "system_notice" ||
-        timelineEntry.entry.itemType === "notification" ||
-        timelineEntry.entry.questionAnswer !== undefined
-      ) {
+      if (workEntryHasOwnRow(timelineEntry.entry)) {
         nextRows.push({
           kind: "work",
           id: timelineEntry.id,
@@ -1816,15 +1890,7 @@ export function deriveMessagesTimelineRows(input: {
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
-          nextEntry.entry.sourceActivityKind === "context-compaction" ||
-          (nextEntry.entry.itemType === "error" &&
-            nextEntry.entry.toolLifecycleStatus === "failed") ||
-          nextEntry.entry.tone === "error" ||
-          nextEntry.entry.sourceActivityKind === "runtime.error" ||
-          nextEntry.entry.itemType === "system_notice" ||
-          nextEntry.entry.itemType === "notification" ||
-          nextEntry.entry.questionAnswer !== undefined ||
-          isPendingApproval(nextEntry.entry) ||
+          workEntryHasOwnRow(nextEntry.entry) ||
           activeWorkEntryIds.has(nextEntry.id) ||
           collapsedEntryIds.has(nextEntry.id) ||
           collapsedSupersededEntryIds.has(nextEntry.id) ||
@@ -2250,6 +2316,7 @@ function replaceStreamingMessageRows(
     expandedRunIds: previousExpandedRuns,
     expandedAttemptIds: previousExpandedAttempts,
     expandedWorkGroupIds: previousExpandedGroups,
+    expandedWorkEntryIds: previousExpandedEntries,
     pendingApprovalRequestIds: previousPendingApprovalRequestIds,
     availableRevertTurnCounts: previousAvailableRevertTurnCounts,
     ...previousContext
@@ -2261,6 +2328,7 @@ function replaceStreamingMessageRows(
     expandedRunIds,
     expandedAttemptIds,
     expandedWorkGroupIds,
+    expandedWorkEntryIds,
     pendingApprovalRequestIds,
     availableRevertTurnCounts,
     ...context
@@ -2273,6 +2341,7 @@ function replaceStreamingMessageRows(
     !shallow(previousExpandedRuns, expandedRunIds) ||
     !shallow(previousExpandedAttempts, expandedAttemptIds) ||
     !shallow(previousExpandedGroups, expandedWorkGroupIds) ||
+    !shallow(previousExpandedEntries, expandedWorkEntryIds) ||
     !shallow(previousPendingApprovalRequestIds, pendingApprovalRequestIds) ||
     !shallow(previousAvailableRevertTurnCounts, availableRevertTurnCounts) ||
     !sameCheckpointSummaries(previousCheckpoints, turnDiffSummaries)
@@ -2390,6 +2459,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.createdAt === bf.createdAt &&
         a.label === bf.label &&
         a.expanded === bf.expanded &&
+        a.loadDeferredWork === bf.loadDeferredWork &&
         anchors.length === nextAnchors.length &&
         anchors.every((id, index) => id === nextAnchors[index])
       );
@@ -2499,15 +2569,16 @@ function visibleUserMessageText(text: string): string {
   return visible + linkLabels(text.slice(cursor));
 }
 
-export function shouldCollapseUserMessage(text: string): boolean {
+export function shouldCollapseUserMessage(text: string, alwaysExpandTables = false): boolean {
   const visible = visibleUserMessageText(text);
   if (visible.trim().length === 0) {
     return false;
   }
 
   return (
-    visible.length > MAX_COLLAPSED_USER_MESSAGE_LENGTH ||
-    visible.split("\n").length > MAX_COLLAPSED_USER_MESSAGE_LINES
+    (visible.length > MAX_COLLAPSED_USER_MESSAGE_LENGTH ||
+      visible.split("\n").length > MAX_COLLAPSED_USER_MESSAGE_LINES) &&
+    !(alwaysExpandTables && chatMessageHasMarkdownTable({ text }))
   );
 }
 

@@ -111,6 +111,9 @@ export interface Preferences {
   /** Hardware Return behavior is iOS-only. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   readonly followUpBehavior?: FollowUpBehavior;
+  readonly alwaysExpandTables?: boolean;
+  readonly alwaysExpandThoughts?: boolean;
+  readonly autoCollapseCompletedTurns?: boolean;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
@@ -191,6 +194,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     dismissedDatabaseStorageNotices?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
+    alwaysExpandTables?: boolean;
+    alwaysExpandThoughts?: boolean;
+    autoCollapseCompletedTurns?: boolean;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
@@ -273,6 +279,12 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.codeFontSize = parsed.codeFontSize;
   }
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
+  if (typeof parsed.alwaysExpandTables === "boolean")
+    preferences.alwaysExpandTables = parsed.alwaysExpandTables;
+  if (typeof parsed.alwaysExpandThoughts === "boolean")
+    preferences.alwaysExpandThoughts = parsed.alwaysExpandThoughts;
+  if (typeof parsed.autoCollapseCompletedTurns === "boolean")
+    preferences.autoCollapseCompletedTurns = parsed.autoCollapseCompletedTurns;
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
   if (typeof parsed.crashReportsEnabled === "boolean") {

@@ -160,6 +160,57 @@ const TASK_ID = ScheduledTaskId.make("task-1");
 const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close duplicates.";
 
 describe("MessagesTimeline messages", () => {
+  it("preserves a standalone thought's manual collapse after its turn remounts", async () => {
+    setup();
+    const runId = RunId.make("thought-disclosure-run");
+    const detail = "I should inspect first.";
+    const thought: Entry = {
+      id: "standalone-thought",
+      kind: "work",
+      createdAt: CREATED_AT,
+      entry: {
+        id: "standalone-thought",
+        createdAt: CREATED_AT,
+        runId,
+        label: "Thought",
+        tone: "thinking",
+        itemType: "reasoning",
+        detail,
+        toolLifecycleStatus: "completed",
+      },
+    };
+    await using screen = await renderTimeline(
+      [
+        message("Inspect", {}, "thought-prompt"),
+        thought,
+        message("Done", { role: "assistant", runId }, "thought-answer"),
+      ],
+      {
+        latestRun: {
+          runId,
+          status: "completed",
+          startedAt: CREATED_AT,
+          completedAt: "2026-03-17T19:12:29.000Z",
+        },
+      },
+    );
+    await expect
+      .element(screen.getByRole("button", { name: "Thought", exact: true }))
+      .toHaveAttribute("aria-expanded", "true");
+    await screen.getByText("Thought", { exact: true }).click();
+    await expect
+      .element(screen.getByRole("button", { name: detail, exact: true }))
+      .toHaveAttribute("aria-expanded", "false");
+    await screen.getByRole("button", { name: /Worked for/ }).click();
+    await expect
+      .element(screen.getByRole("button", { name: detail, exact: true }))
+      .not.toBeInTheDocument();
+    await screen.getByRole("button", { name: /Worked for/ }).click();
+    await expect
+      .element(screen.getByRole("button", { name: detail, exact: true }))
+      .toHaveAttribute("aria-expanded", "false");
+  });
+
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
@@ -526,6 +577,40 @@ describe("MessagesTimeline automation prompts", () => {
     await using screen = await renderTimeline([message(AUTOMATION_PROMPT)]);
     expect(screen.buttons(/^Automation/)).toHaveLength(0);
     expect(screen.text()).toContain("Label every new issue and close duplicates.");
+  });
+
+  it("retains a long table's manual disclosure across a thread switch", async () => {
+    setup();
+    const props = baseProps();
+    const table = [
+      "| Name |",
+      "| --- |",
+      ...Array.from({ length: 30 }, (_, i) => `| Row ${i} |`),
+    ].join("\n");
+    const entries = [message(table)];
+    await using screen = await renderElement(
+      <MessagesTimeline {...props} timelineEntries={entries} />,
+    );
+    await click(screen.button("Show less"));
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={`${props.routeThreadKey}-other`}
+        timelineEntries={[message("Other thread")]}
+      />,
+    );
+    await screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />);
+    await vi.waitFor(() => expect(screen.button("Show full message")).toBeDefined());
+    await click(screen.button("Show full message"));
+    await screen.rerender(
+      <MessagesTimeline
+        {...props}
+        routeThreadKey={`${props.routeThreadKey}-other`}
+        timelineEntries={[message("Other thread")]}
+      />,
+    );
+    await screen.rerender(<MessagesTimeline {...props} timelineEntries={entries} />);
+    await vi.waitFor(() => expect(screen.button("Show less")).toBeDefined());
   });
 
   it("reveals a find match beyond the folded automation prompt's initial viewport", async () => {

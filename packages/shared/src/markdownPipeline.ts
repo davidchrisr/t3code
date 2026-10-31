@@ -313,6 +313,18 @@ const imageSourceProcessor = unified()
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(CHAT_MARKDOWN_REHYPE_PLUGINS);
 
+const messageTableCache = new WeakMap<{ readonly text: string }, boolean>();
+
+export function chatMessageHasMarkdownTable(message: { readonly text: string }): boolean {
+  const cached = messageTableCache.get(message);
+  if (cached !== undefined) return cached;
+  const hasTable = (node: ImageSourceNode): boolean =>
+    node.type === "table" || node.children?.some(hasTable) === true;
+  const result = hasTable(imageSourceProcessor.parse(message.text));
+  messageTableCache.set(message, result);
+  return result;
+}
+
 interface ImageSourceNode {
   readonly type: string;
   readonly tagName?: string;

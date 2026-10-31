@@ -591,6 +591,24 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
   {
+    id: "always-expand-tables",
+    title: "Always expand Markdown tables",
+    to: "/settings/chat",
+    searchTerms: ["table markdown expand collapse message"],
+  },
+  {
+    id: "always-expand-thoughts",
+    title: "Always expand thoughts",
+    to: "/settings/chat",
+    searchTerms: ["thought thinking reasoning expand collapse"],
+  },
+  {
+    id: "auto-collapse-completed-turns",
+    title: "Automatically collapse completed turns",
+    to: "/settings/chat",
+    searchTerms: ["turn complete finish earlier messages collapse fold expand"],
+  },
+  {
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/maintenance",

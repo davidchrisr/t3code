@@ -55,6 +55,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { shouldCollapseUserMessage } from "./MessagesTimeline.logic";
+import { useClientSettings } from "../../hooks/useSettings";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   asKnownContextRecord,
@@ -703,6 +704,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ) : null}
             <div onCopyCapture={onBodyCopyCapture}>
               <CollapsibleUserMessageBody
+                key={`${ctx.routeThreadKey}:${row.message.id}`}
+                messageId={row.message.id}
                 text={resolvedContext.text}
                 renderContextReference={renderContextReference}
                 skills={ctx.skills}
@@ -826,13 +829,23 @@ const COLLAPSED_USER_MESSAGE_FADE_HEIGHT_REM = 1.75;
 const COLLAPSED_USER_MESSAGE_FADE_MASK = `linear-gradient(to bottom, black calc(100% - ${COLLAPSED_USER_MESSAGE_FADE_HEIGHT_REM}rem), transparent)`;
 
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
+  messageId: MessageId;
   text: string;
   renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
   skills: ReadonlyArray<ServerProviderSkill>;
   markdownCwd: string | undefined;
   collapsible?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const ctx = use(TimelineRowCtx);
+  const [expandedOverride, setExpandedOverride] = useState(() =>
+    ctx.messageBodyOverrides.get(props.messageId),
+  );
+  const setExpanded = (value: boolean) => {
+    ctx.messageBodyOverrides.set(props.messageId, value);
+    setExpandedOverride(value);
+  };
+  const alwaysExpandTables = useClientSettings((settings) => settings.alwaysExpandTables);
+  const expanded = expandedOverride ?? !shouldCollapseUserMessage(props.text, alwaysExpandTables);
   const revealForFind = () => setExpanded(true);
   const revealRef = findRevealRef(revealForFind);
   const hasVisibleBody = props.text.trim().length > 0;
@@ -879,7 +892,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
               variant="ghost-muted"
               aria-expanded={expanded}
               data-scroll-anchor-ignore
-              onClick={() => setExpanded((value) => !value)}
+              onClick={() => setExpanded(!expanded)}
               className="-ml-1"
             >
               {expanded ? "Show less" : "Show full message"}

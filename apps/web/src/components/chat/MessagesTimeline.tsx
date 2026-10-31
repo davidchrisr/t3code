@@ -24,6 +24,7 @@ import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/s
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { observeResize } from "~/lib/observeResize";
 import { useStableCallback } from "~/hooks/useStableCallback";
+import { useClientSettings } from "../../hooks/useSettings";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const EMPTY_PENDING_APPROVALS: ReadonlyArray<PendingApproval> = [];
@@ -139,11 +140,13 @@ function timelineListStateFor(identity: string): {
   readonly identity: string;
   readonly rememberedPosition: RememberedTimelinePosition | undefined;
   readonly workGroupViewState: WorkGroupViewState;
+  readonly messageBodyOverrides: Map<MessageId, boolean>;
 } {
   const rememberedPosition = readTimelinePosition(identity);
   return {
     identity,
     rememberedPosition,
+    messageBodyOverrides: rememberedPosition?.disclosures?.messageBodies ?? new Map(),
     workGroupViewState: rememberedPosition?.disclosures?.workGroupState ?? {
       scrollPositions: new Map(),
       expandedEntries: new Set(),
@@ -399,6 +402,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
   historyControls,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
+  const chatExpansion = useClientSettings((settings) => ({
+    alwaysExpandTables: settings.alwaysExpandTables,
+    alwaysExpandThoughts: settings.alwaysExpandThoughts,
+    autoCollapseCompletedTurns: settings.autoCollapseCompletedTurns,
+  }));
   // Snapshot restore positions on identity changes; ongoing scroll writes must not move them.
   // Find open at the opening is part of the snapshot: opening find later
   // announces its own navigation (threadFindStore's announceOpening).
@@ -409,11 +417,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(
     () => listState.rememberedPosition?.disclosures?.runs ?? new Set(),
   );
+  const [collapsedRunIds, setCollapsedRunIds] = useState<ReadonlySet<RunId>>(
+    () => listState.rememberedPosition?.disclosures?.collapsedRuns ?? new Set(),
+  );
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(
     () => listState.rememberedPosition?.disclosures?.workGroups ?? new Set(),
   );
   const [expandedAttemptIds, setExpandedAttemptIds] = useState<ReadonlySet<RunAttemptId>>(
     () => listState.rememberedPosition?.disclosures?.attempts ?? new Set(),
+  );
+  const [collapsedAttemptIds, setCollapsedAttemptIds] = useState<ReadonlySet<RunAttemptId>>(
+    () => listState.rememberedPosition?.disclosures?.collapsedAttempts ?? new Set(),
   );
   // A list that opens on a thread with find open takes the opening step below,
   // so the restore runs and releases follow once for find.
@@ -428,10 +442,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
   );
   const [fullscreenAppRowId, setFullscreenAppRowId] = useState<string | null>(null);
   let paintedExpandedRunIds = expandedRunIds;
+  let paintedCollapsedRunIds = collapsedRunIds;
   let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
   let paintedExpandedAttemptIds = expandedAttemptIds;
+  let paintedCollapsedAttemptIds = collapsedAttemptIds;
   const identityChanged = listState.identity !== listIdentityKey;
-  const { rememberedPosition, workGroupViewState } = identityChanged
+  const { rememberedPosition, workGroupViewState, messageBodyOverrides } = identityChanged
     ? timelineListStateFor(listIdentityKey)
     : listState;
   if (identityChanged) {
@@ -440,6 +456,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       identity: listIdentityKey,
       rememberedPosition,
       workGroupViewState,
+      messageBodyOverrides,
       findOpenAtOpening: findOpen,
     });
     setPositionedThreadKey(null);
@@ -448,11 +465,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
     // nor when that thread comes back.
     setFullscreenAppRowId(null);
     paintedExpandedRunIds = rememberedPosition?.disclosures?.runs ?? new Set();
+    paintedCollapsedRunIds = rememberedPosition?.disclosures?.collapsedRuns ?? new Set();
     paintedExpandedWorkGroupIds = rememberedPosition?.disclosures?.workGroups ?? new Set();
     paintedExpandedAttemptIds = rememberedPosition?.disclosures?.attempts ?? new Set();
+    paintedCollapsedAttemptIds = rememberedPosition?.disclosures?.collapsedAttempts ?? new Set();
     setExpandedRunIds(paintedExpandedRunIds);
+    setCollapsedRunIds(paintedCollapsedRunIds);
     setExpandedWorkGroupIds(paintedExpandedWorkGroupIds);
     setExpandedAttemptIds(paintedExpandedAttemptIds);
+    setCollapsedAttemptIds(paintedCollapsedAttemptIds);
   }
   const citationThreadRef = parseScopedThreadKey(routeThreadKey);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
@@ -506,9 +527,18 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
+    const expanded =
+      expandedRunIds.has(runId) ||
+      (!chatExpansion.autoCollapseCompletedTurns && !collapsedRunIds.has(runId));
+    setCollapsedRunIds((existing) => {
+      const next = new Set(existing);
+      if (expanded) next.add(runId);
+      else next.delete(runId);
+      return next;
+    });
     setExpandedRunIds((existing) => {
       const next = new Set(existing);
-      if (next.has(runId)) {
+      if (expanded) {
         next.delete(runId);
       } else {
         next.add(runId);
@@ -530,6 +560,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
   };
   const onToggleAttemptFold = (attemptId: RunAttemptId) => {
     suspendEndScrollMaintenanceForDisclosure(`attempt-fold:${attemptId}`);
+    const expanded = expandedAttemptIds.has(attemptId);
+    setCollapsedAttemptIds((existing) => {
+      const next = new Set(existing);
+      if (expanded) next.add(attemptId);
+      else next.delete(attemptId);
+      return next;
+    });
     setExpandedAttemptIds((existing) => {
       const next = new Set(existing);
       if (next.has(attemptId)) {
@@ -541,7 +578,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
 
-  // An interrupted run opens its fold; a newer run closes the previous run's.
   const [observedLatestRun, setObservedLatestRun] = useState({
     identity: listIdentityKey,
     runId: latestRun?.runId,
@@ -561,20 +597,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (
       observedLatestRun.identity === listIdentityKey &&
       latestRun &&
-      previousRunId !== undefined
+      latestRun.runId === previousRunId &&
+      observedLatestRun.status === "running" &&
+      latestRun.status === "interrupted"
     ) {
-      if (latestRun.runId === previousRunId) {
-        if (observedLatestRun.status === "running" && latestRun.status === "interrupted") {
-          setExpandedRunIds((existing) => new Set(existing).add(latestRun.runId));
-        }
-      } else {
-        setExpandedRunIds((existing) => {
-          if (!existing.has(previousRunId)) return existing;
-          const next = new Set(existing);
-          next.delete(previousRunId);
-          return next;
-        });
-      }
+      setExpandedRunIds((existing) => new Set(existing).add(latestRun.runId));
     }
   }
 
@@ -676,8 +703,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
     latestRun,
     runningRunId,
     expandedRunIds: visibleExpandedRunIds,
+    collapsedRunIds: paintedCollapsedRunIds,
+    chatExpansion,
     expandedAttemptIds: visibleExpandedAttemptIds,
+    collapsedAttemptIds: paintedCollapsedAttemptIds,
     expandedWorkGroupIds,
+    expandedWorkEntryIds: new Set(workGroupViewState.expandedEntries),
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -918,8 +949,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
           atEnd: isAtEnd,
           disclosures: {
             runs: paintedExpandedRunIds,
+            collapsedRuns: paintedCollapsedRunIds,
             workGroups: paintedExpandedWorkGroupIds,
             attempts: paintedExpandedAttemptIds,
+            collapsedAttempts: paintedCollapsedAttemptIds,
+            messageBodies: messageBodyOverrides,
             workGroupState: workGroupViewState,
           },
         };
@@ -1049,6 +1083,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
     onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     workGroupViewState,
+    messageBodyOverrides,
   };
   const compactionAwaitingRow =
     isCompacting &&
@@ -1578,7 +1613,7 @@ function ContextCompactionTimelineRow({
 }
 
 function useDeferredWorkLoading(
-  row: { expanded: boolean; deferredWorkItemIds?: ReadonlyArray<string> },
+  row: { expanded: boolean; deferredWorkItemIds?: ReadonlyArray<string>; loadDeferredWork?: true },
   onToggle: () => void,
 ) {
   const ctx = use(TimelineRowCtx);
@@ -1587,6 +1622,7 @@ function useDeferredWorkLoading(
   const environmentId = ref?.environmentId;
   const threadId = ref?.threadId;
   const anchorsKey = row.deferredWorkItemIds?.join("\n") ?? "";
+  const shouldLoad = row.expanded || row.loadDeferredWork === true;
   const [failed, setFailed] = useState(false);
   const load = () => {
     if (!anchorsKey || environmentId === undefined || threadId === undefined) return;
@@ -1601,15 +1637,15 @@ function useDeferredWorkLoading(
     );
   };
   const loadOnExpand = useEffectEvent(load);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load deferred history for expanded folds and thoughts kept visible inside folded turns.
   useEffect(() => {
-    if (row.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
-  }, [row.expanded, anchorsKey, environmentId, threadId]);
+    if (shouldLoad && anchorsKey && environmentId && threadId) loadOnExpand();
+  }, [shouldLoad, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Click to retry." : null;
-  const loading = ref !== null && row.expanded && anchorsKey !== "" && !failed;
+  const loading = ref !== null && shouldLoad && anchorsKey !== "" && !failed;
   const toggle = () => {
     setFailed(false);
-    if (error && row.expanded) load();
+    if (error && shouldLoad) load();
     else onToggle();
   };
 

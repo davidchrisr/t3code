@@ -34,9 +34,115 @@ import {
   type ThreadFeedLatestRun,
 } from "./threadActivity";
 
+const COLLAPSED_CHAT_SETTINGS = {
+  alwaysExpandTables: false,
+  alwaysExpandThoughts: false,
+  autoCollapseCompletedTurns: true,
+};
+
+function deriveTestFeed(...args: Parameters<typeof deriveThreadFeedPresentation>) {
+  args[7] ??= COLLAPSED_CHAT_SETTINGS;
+  return deriveThreadFeedPresentation(...args);
+}
+
 const threadId = ThreadId.make("thread-1");
 const sourceThreadId = ThreadId.make("thread-source");
 const runId = RunId.make("run-1");
+
+it("loads deferred thoughts without expanding automatically collapsed turns", () => {
+  const work = Array.from({ length: 151 }, (_, index): OrchestrationV2TurnItem => {
+    const item = base(`deferred-work-${index}`, "2026-06-20T00:00:02.000Z", index + 1);
+    return index === 75
+      ? { ...item, type: "reasoning", text: "Deferred thought", streaming: false }
+      : { ...item, type: "command_execution", input: "echo ok", exitCode: 0 };
+  });
+  const first = work[0]!;
+  const anchor = {
+    ...first,
+    deferredWork: {
+      cursor: "deferred-work",
+      itemCount: work.length,
+      lastOrdinal: work.at(-1)!.ordinal,
+    },
+  };
+  const final = { ...assistantMessage(), ordinal: 152 };
+  const deferredFeed = buildThreadFeed([
+    projected(userMessage(), 0),
+    projected(anchor, 1),
+    projected(final, 152),
+  ]);
+  const loadedFeed = buildThreadFeed([
+    projected(userMessage(), 0),
+    ...work.map((item, index) => projected(item, index + 1)),
+    projected(final, 152),
+  ]);
+  const latestRun = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:03.000Z",
+  };
+  const cache = createThreadFeedCache();
+  for (const [alwaysExpandThoughts, manuallyCollapsed] of [
+    [false, false],
+    [true, false],
+    [true, true],
+  ] as const) {
+    const settings = { ...COLLAPSED_CHAT_SETTINGS, alwaysExpandThoughts };
+    const collapsedRuns = new Set(manuallyCollapsed ? [runId] : []);
+    const deferred = deriveThreadFeedPresentation(
+      deferredFeed,
+      latestRun,
+      new Set(),
+      new Set(),
+      null,
+      false,
+      cache,
+      settings,
+      collapsedRuns,
+    );
+    const fold = deferred.find((entry) => entry.type === "run-fold");
+    expect(fold).toMatchObject({ expanded: false, deferredWorkItemIds: [first.id] });
+    if (alwaysExpandThoughts && !manuallyCollapsed)
+      expect(fold).toMatchObject({ loadDeferredWork: true });
+    else expect(fold).not.toHaveProperty("loadDeferredWork", true);
+    const loaded = deriveThreadFeedPresentation(
+      loadedFeed,
+      latestRun,
+      new Set(),
+      new Set(),
+      null,
+      false,
+      cache,
+      settings,
+      collapsedRuns,
+    );
+    expect(
+      loaded
+        .filter((entry) => entry.type === "activity-group")
+        .flatMap((entry) => entry.activities.map((activity) => activity.workEntry.detail)),
+    ).toEqual(alwaysExpandThoughts && !manuallyCollapsed ? ["Deferred thought"] : []);
+    expect(loaded.find((entry) => entry.type === "run-fold")).toMatchObject({ expanded: false });
+  }
+  const workAnchor = deferredFeed.find((entry) => entry.type === "activity-group")!;
+  if (workAnchor.type !== "activity-group") throw new Error("Expected work anchor");
+  for (const manuallyCollapsed of [false, true]) {
+    const rows = deriveTestFeed(
+      deferredFeed,
+      latestRun,
+      new Set(),
+      new Set([`work-group:${workAnchor.activities[0]!.id}`]),
+      null,
+      false,
+      cache,
+      COLLAPSED_CHAT_SETTINGS,
+      new Set(manuallyCollapsed ? [runId] : []),
+    );
+    expect(rows.find((entry) => entry.type === "run-fold")?.loadDeferredWork).toBe(
+      manuallyCollapsed ? undefined : true,
+    );
+  }
+});
 
 it("shows a captured MCP app for a failed deferred write", () => {
   const mcpApp = {
@@ -73,7 +179,7 @@ it("keeps historical plan detail accessible from its paged turn item", () => {
   expect(activity?.getFullDetail()).toBe("Full historical plan text");
   expect(activity?.getCopyText()).toBe("Full historical plan text\n");
   expect(activity?.prominent).toBe(true);
-  const presented = deriveThreadFeedPresentation(
+  const presented = deriveTestFeed(
     buildThreadFeed([
       projected(userMessage(), 0),
       projected(command(), 1),
@@ -97,13 +203,7 @@ it("shows a compact command as one mobile divider before, during, and after comp
   const prompt = projected({ ...userMessage(), text: "/compact", idleCompaction: "onReturn" }, 0);
   const latestRun = { runId, status: "running" as const, startedAt, completedAt: null };
   const present = (items: OrchestrationV2ProjectedTurnItem[]) =>
-    deriveThreadFeedPresentation(
-      buildThreadFeed(items),
-      latestRun,
-      new Set(),
-      new Set(),
-      startedAt,
-    );
+    deriveTestFeed(buildThreadFeed(items), latestRun, new Set(), new Set(), startedAt);
 
   const waiting = present([prompt]);
   expect(waiting.map((entry) => entry.type)).toEqual(["message"]);
@@ -151,7 +251,7 @@ it("shows a skipped compaction as one stopped row, without a separate interrupte
     },
     2,
   );
-  const rows = deriveThreadFeedPresentation(
+  const rows = deriveTestFeed(
     buildThreadFeed([prompt, compaction, interrupted]),
     {
       runId,
@@ -171,7 +271,7 @@ it("shows a skipped compaction as one stopped row, without a separate interrupte
 });
 
 it("keeps the interrupted row for a compaction stopped before its provider started", () => {
-  const rows = deriveThreadFeedPresentation(
+  const rows = deriveTestFeed(
     buildThreadFeed([
       projected({ ...userMessage(), text: "/compact" }, 0),
       projected(
@@ -205,7 +305,7 @@ it("keeps the interrupted row for a compaction stopped before its provider start
 it.each(["/compact", "Continue"])(
   "keeps a completed compaction divider visible while other settled work folds for %s",
   (promptText) => {
-    const rows = deriveThreadFeedPresentation(
+    const rows = deriveTestFeed(
       buildThreadFeed([
         projected({ ...userMessage(), text: promptText }, 0),
         projected(command(), 1),
@@ -426,7 +526,7 @@ describe("buildThreadFeed", () => {
         projected(question, 2),
         projected(assistantMessage(), 3),
       ]);
-      const presented = deriveThreadFeedPresentation(feed, null, new Set());
+      const presented = deriveTestFeed(feed, null, new Set());
       expect(presented.map((entry) => entry.type)).toEqual([
         "message",
         "run-fold",
@@ -436,9 +536,13 @@ describe("buildThreadFeed", () => {
       expect(presented[2]).toMatchObject({
         activities: [{ workEntry: { questionAnswer: question.questionAnswer } }],
       });
-      expect(
-        deriveThreadFeedPresentation(feed, null, new Set([runId])).map((entry) => entry.type),
-      ).toEqual(["message", "run-fold", "activity-group", "activity-group", "message"]);
+      expect(deriveTestFeed(feed, null, new Set([runId])).map((entry) => entry.type)).toEqual([
+        "message",
+        "run-fold",
+        "activity-group",
+        "activity-group",
+        "message",
+      ]);
     },
   );
 
@@ -495,7 +599,7 @@ describe("buildThreadFeed", () => {
       });
       expect(before[1]).not.toHaveProperty("message.checkpointSummary");
       expect(getReviewSectionIdForCheckpoint(summary)).toBe("turn:2");
-      const fallback = deriveThreadFeedPresentation(
+      const fallback = deriveTestFeed(
         [after.at(-1)!],
         null,
         new Set(),
@@ -512,24 +616,16 @@ describe("buildThreadFeed", () => {
         projected(final, 3),
       ];
       const workBefore = buildThreadFeed(workRows, { cache });
-      deriveThreadFeedPresentation(workBefore, null, new Set(), new Set(), null, false, cache);
+      deriveTestFeed(workBefore, null, new Set(), new Set(), null, false, cache);
       const workAfter = buildThreadFeed(workRows, { checkpointSummaries: [summary], cache });
       for (const expanded of [new Set<RunId>(), new Set([runId])]) {
-        const presented = deriveThreadFeedPresentation(
-          workAfter,
-          null,
-          expanded,
-          new Set(),
-          null,
-          false,
-          cache,
-        );
+        const presented = deriveTestFeed(workAfter, null, expanded, new Set(), null, false, cache);
         expect(presented.find((entry) => entry.type === "run-fold")).toMatchObject({
           checkpointSummary: summary,
         });
         expect(presented.at(-1)).not.toHaveProperty("message.checkpointSummary");
       }
-      const active = deriveThreadFeedPresentation(
+      const active = deriveTestFeed(
         workAfter,
         {
           runId,
@@ -801,7 +897,7 @@ describe("buildThreadFeed", () => {
       const foldRunId = messageFoldRunId(feed, "message-middle");
       expect(foldRunId, String(runless)).toBe(runless ? "runless:message-user" : runId);
       const ids = (expanded: ReadonlySet<RunId>) =>
-        deriveThreadFeedPresentation(feed, null, expanded).map((entry) => entry.id);
+        deriveTestFeed(feed, null, expanded).map((entry) => entry.id);
       expect(ids(new Set())).not.toContain("message-middle");
       expect(ids(new Set([foldRunId!]))).toContain("message-middle");
     }
@@ -837,7 +933,7 @@ describe("buildThreadFeed", () => {
       completedAt: "2026-06-20T00:00:03.000Z",
     };
 
-    const collapsed = deriveThreadFeedPresentation(feed, latestRun, new Set());
+    const collapsed = deriveTestFeed(feed, latestRun, new Set());
     expect(collapsed.map((entry) => entry.id)).toEqual([
       "message-user",
       "run-fold:run-1",
@@ -849,7 +945,142 @@ describe("buildThreadFeed", () => {
       label: "Worked for 2s",
     });
 
-    const expanded = deriveThreadFeedPresentation(feed, latestRun, new Set([runId]));
+    const chatExpansion = {
+      alwaysExpandTables: false,
+      alwaysExpandThoughts: false,
+      autoCollapseCompletedTurns: false,
+    };
+    const cache = createThreadFeedCache();
+    const present = (settings = chatExpansion, collapsedRuns = new Set<RunId>()) =>
+      deriveTestFeed(
+        feed,
+        latestRun,
+        new Set(),
+        new Set(),
+        null,
+        false,
+        cache,
+        settings,
+        collapsedRuns,
+      );
+    expect(present().some((entry) => entry.id === "message-opening")).toBe(true);
+    expect(present(chatExpansion, new Set([runId])).map((entry) => entry.id)).toEqual(
+      collapsed.map((entry) => entry.id),
+    );
+    expect(
+      present({ ...chatExpansion, autoCollapseCompletedTurns: true }).map((entry) => entry.id),
+    ).toEqual(collapsed.map((entry) => entry.id));
+
+    const tableFeed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected({ ...opening, text: "| Name | Value |\n| --- | --- |\n| A | 1 |" }, 1),
+      projected(command(), 2),
+      projected(assistantMessage(), 3),
+    ]);
+    const tableSettings = {
+      ...chatExpansion,
+      alwaysExpandTables: true,
+      autoCollapseCompletedTurns: true,
+    };
+    const tableRows = deriveTestFeed(
+      tableFeed,
+      latestRun,
+      new Set(),
+      new Set(),
+      null,
+      false,
+      undefined,
+      tableSettings,
+    );
+    expect(tableRows.map((entry) => entry.id)).toEqual([
+      "message-user",
+      "run-fold:run-1",
+      "message-opening",
+      "message-assistant",
+    ]);
+
+    const thought: OrchestrationV2TurnItem = {
+      ...base("expanded-thought", "2026-06-20T00:00:01.750Z", 2),
+      type: "reasoning",
+      text: "Full thought",
+      streaming: false,
+    };
+    const thoughtFeed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(opening, 1),
+      projected(thought, 2),
+      projected(command(), 3),
+      projected(assistantMessage(), 4),
+    ]);
+    const thoughtRows = deriveTestFeed(
+      thoughtFeed,
+      latestRun,
+      new Set(),
+      new Set(),
+      null,
+      false,
+      undefined,
+      { ...chatExpansion, alwaysExpandThoughts: true, autoCollapseCompletedTurns: true },
+    );
+    expect(
+      thoughtRows
+        .filter((entry) => entry.type === "activity-group")
+        .flatMap((entry) => entry.activities.map((activity) => activity.workEntry.itemType)),
+    ).toEqual(["reasoning"]);
+
+    const manualCache = createThreadFeedCache();
+    const workIds = (rows: ThreadFeedEntry[]) =>
+      rows.flatMap((row) =>
+        row.type === "activity-group" ? row.activities.map((entry) => entry.id) : [],
+      );
+    const allWorkIds = thoughtFeed.flatMap((row) =>
+      row.type === "activity-group" ? row.activities.map((entry) => entry.id) : [],
+    );
+    for (const disclosure of ["group", "entry"] as const) {
+      const presentManual = (completed: boolean, collapsed = false) =>
+        deriveTestFeed(
+          completed ? thoughtFeed : thoughtFeed.slice(0, -1),
+          completed ? latestRun : { ...latestRun, status: "running", completedAt: null },
+          new Set(),
+          new Set(disclosure === "group" ? [`work-group:${allWorkIds[0]}`] : []),
+          completed ? null : latestRun.startedAt,
+          false,
+          manualCache,
+          COLLAPSED_CHAT_SETTINGS,
+          new Set(collapsed ? [runId] : []),
+          new Set(disclosure === "entry" ? [allWorkIds[1]!] : []),
+        );
+      const expectedIds = disclosure === "group" ? allWorkIds : [allWorkIds[1]];
+      if (disclosure === "group") expect(workIds(presentManual(false))).toEqual(expectedIds);
+      const completed = presentManual(true);
+      expect(workIds(completed), disclosure).toEqual(expectedIds);
+      expect(completed.some((row) => row.id === "message-opening")).toBe(false);
+      expect(workIds(presentManual(true, true)), disclosure).toEqual([]);
+      expect(workIds(presentManual(true)), disclosure).toEqual(expectedIds);
+    }
+    for (const alwaysExpandThoughts of [true, false, true]) {
+      const presented = deriveTestFeed(
+        thoughtFeed,
+        latestRun,
+        new Set(),
+        new Set(),
+        null,
+        false,
+        manualCache,
+        { ...chatExpansion, alwaysExpandThoughts },
+        new Set(),
+        new Set([allWorkIds[0]!]),
+      );
+      expect(presented.find((row) => row.id === allWorkIds[0])).toMatchObject({
+        type: "activity-group",
+        activities: [{ id: allWorkIds[0] }],
+      });
+    }
+
+    const expanded = deriveTestFeed(feed, latestRun, new Set([runId]));
+    expect(
+      deriveThreadFeedPresentation(feed, latestRun, new Set()).map((entry) => entry.id),
+    ).toEqual(expanded.map((entry) => entry.id));
     expect(expanded.map((entry) => entry.type)).toEqual([
       "message",
       "run-fold",
@@ -864,18 +1095,18 @@ describe("buildThreadFeed", () => {
     };
     const deferredFeed = buildThreadFeed([projected(userMessage(), 0), projected(anchor, 1)]);
     const running = { ...latestRun, status: "running" as const, completedAt: null };
-    const deferredRows = deriveThreadFeedPresentation(deferredFeed, running, new Set());
+    const deferredRows = deriveTestFeed(deferredFeed, running, new Set());
     const disclosure = deferredRows.find((entry) => entry.type === "run-fold");
     expect(disclosure).toMatchObject({ deferredWorkItemIds: [anchor.id], expanded: false });
     if (disclosure?.type !== "run-fold") throw new Error("Expected deferred work disclosure");
     expect(
-      deriveThreadFeedPresentation(deferredFeed, running, new Set([disclosure.runId])).some(
+      deriveTestFeed(deferredFeed, running, new Set([disclosure.runId])).some(
         (entry) => entry.type === "activity-group",
       ),
     ).toBe(true);
     expect(expanded[4]).toMatchObject({ message: { id: middle.messageId, text: middle.text } });
 
-    const active = deriveThreadFeedPresentation(
+    const active = deriveTestFeed(
       feed,
       { ...latestRun, status: "running", completedAt: null },
       new Set(),
@@ -904,7 +1135,7 @@ describe("buildThreadFeed", () => {
       projected(assistantMessage(), 2),
     ]);
 
-    const presented = deriveThreadFeedPresentation(feed, null, new Set());
+    const presented = deriveTestFeed(feed, null, new Set());
     expect(presented.map((entry) => entry.id)).toEqual([
       "message-user",
       "run-fold:run-1",
@@ -959,7 +1190,7 @@ describe("buildThreadFeed", () => {
       projected(assistantMessage("2026-06-20T00:00:05.000Z"), 5),
     ]);
 
-    const collapsed = deriveThreadFeedPresentation(feed, null, new Set());
+    const collapsed = deriveTestFeed(feed, null, new Set());
     expect(collapsed.map((entry) => entry.type)).toEqual([
       "message",
       "run-fold",
@@ -978,7 +1209,7 @@ describe("buildThreadFeed", () => {
           : [],
       ),
     ).toEqual(projectedResources.slice(1));
-    const expanded = deriveThreadFeedPresentation(feed, null, new Set([runId]));
+    const expanded = deriveTestFeed(feed, null, new Set([runId]));
     expect(
       expanded.some(
         (entry) =>
@@ -1015,7 +1246,7 @@ describe("buildThreadFeed", () => {
       completedAt: "2026-06-20T00:00:05.000Z",
     };
     const present = (children: ReadonlyArray<OrchestrationV2TurnItem>) =>
-      deriveThreadFeedPresentation(
+      deriveTestFeed(
         buildThreadFeed([
           projected(userMessage(), 0),
           projected(command("2026-06-20T00:00:02.000Z"), 1),
@@ -1097,7 +1328,7 @@ describe("buildThreadFeed", () => {
             : entry.type,
       );
 
-    const settled = deriveThreadFeedPresentation(feed(false), null, new Set());
+    const settled = deriveTestFeed(feed(false), null, new Set());
     expect(shape(settled)).toEqual([
       "user:launch",
       "fold:Worked for 8s",
@@ -1108,9 +1339,7 @@ describe("buildThreadFeed", () => {
     ]);
     const launchFold = settled.find((entry) => entry.type === "run-fold");
     if (launchFold?.type !== "run-fold") throw new Error("Expected the launch fold");
-    expect(
-      shape(deriveThreadFeedPresentation(feed(false), null, new Set([launchFold.runId]))),
-    ).toEqual([
+    expect(shape(deriveTestFeed(feed(false), null, new Set([launchFold.runId])))).toEqual([
       "user:launch",
       "fold:Worked for 8s",
       "activity-group",
@@ -1122,14 +1351,7 @@ describe("buildThreadFeed", () => {
 
     expect(
       shape(
-        deriveThreadFeedPresentation(
-          feed(true),
-          null,
-          new Set(),
-          new Set(),
-          "2026-06-20T00:01:12.000Z",
-          true,
-        ),
+        deriveTestFeed(feed(true), null, new Set(), new Set(), "2026-06-20T00:01:12.000Z", true),
       ),
     ).toEqual([
       "user:launch",
@@ -1147,7 +1369,7 @@ describe("buildThreadFeed", () => {
       runId: null,
     });
     const presented = (start: OrchestrationV2TurnItem) =>
-      deriveThreadFeedPresentation(
+      deriveTestFeed(
         buildThreadFeed(
           [
             imported(userMessage("2026-06-20T00:00:00.000Z"), "imported-prompt"),
@@ -1210,14 +1432,7 @@ describe("buildThreadFeed", () => {
       projected(runningCommand, 1),
     ]);
 
-    const presented = deriveThreadFeedPresentation(
-      feed,
-      null,
-      new Set(),
-      new Set(),
-      startedAt,
-      true,
-    );
+    const presented = deriveTestFeed(feed, null, new Set(), new Set(), startedAt, true);
     expect(presented.find((entry) => entry.type === "activity-group")).toMatchObject({
       id: "live-activity-row",
       activities: [{ live: true, groupStandIn: { label: "Running vp" } }],
@@ -1229,13 +1444,7 @@ describe("buildThreadFeed", () => {
     const startedAt = "2026-04-01T00:00:01.000Z";
     const run = { runId, status: "running" as const, startedAt, completedAt: null };
     expect(
-      deriveThreadFeedPresentation(
-        [],
-        { ...run, turnEnded: true },
-        new Set(),
-        new Set(),
-        startedAt,
-      ),
+      deriveTestFeed([], { ...run, turnEnded: true }, new Set(), new Set(), startedAt),
     ).toEqual([]);
   });
 });
@@ -1254,7 +1463,7 @@ describe("retained v2 feed presentation", () => {
       completedAt: null,
     };
     const before = buildThreadFeed(rows);
-    const beforePresentation = deriveThreadFeedPresentation(
+    const beforePresentation = deriveTestFeed(
       before,
       latestRun,
       new Set(),
@@ -1269,7 +1478,7 @@ describe("retained v2 feed presentation", () => {
         2,
       ),
     ]);
-    const afterPresentation = deriveThreadFeedPresentation(
+    const afterPresentation = deriveTestFeed(
       after,
       latestRun,
       new Set(),
@@ -1354,11 +1563,7 @@ describe("retained v2 feed presentation", () => {
         "native",
         "native-delegation",
       ]);
-      const presented = deriveThreadFeedPresentation(
-        feed,
-        null,
-        new Set([runId, RunId.make("other-run")]),
-      );
+      const presented = deriveTestFeed(feed, null, new Set([runId, RunId.make("other-run")]));
       expect(
         presented.find(
           (entry) =>
@@ -1399,11 +1604,7 @@ describe("retained v2 feed presentation", () => {
           : [],
       ),
     ).toEqual([["a", "b"], ["item-command"], ["c"], ["d"]]);
-    const presented = deriveThreadFeedPresentation(
-      feed,
-      null,
-      new Set([runId, RunId.make("other-run")]),
-    );
+    const presented = deriveTestFeed(feed, null, new Set([runId, RunId.make("other-run")]));
     const groups = presented.flatMap((entry) =>
       entry.type === "activity-group" && entry.activities[0]?.projectedItem.item.type === "subagent"
         ? [entry]
@@ -1476,7 +1677,7 @@ describe("subagent continued by a later turn", () => {
   ];
 
   it("keeps each turn's fold between its own prompt and answer", () => {
-    const presented = deriveThreadFeedPresentation(
+    const presented = deriveTestFeed(
       buildThreadFeed(items.map((entry, index) => projected(entry, index))),
       { runId: run2, status: "completed", startedAt: at(30), completedAt: at(41) },
       new Set(),
@@ -1507,7 +1708,7 @@ it("stops stranded thinking after a steer and follows the next thought or tool",
   const steer = { ...userMessage(at), inputIntent: "steer" as const };
   const tool = { ...command(at), status: "running" as const, completedAt: null };
   const rows = (items: ReadonlyArray<OrchestrationV2TurnItem>, expanded = new Set<string>()) =>
-    deriveThreadFeedPresentation(
+    deriveTestFeed(
       buildThreadFeed(items.map((item, position) => projected(item, position))),
       { runId, status: "running", startedAt: at, completedAt: null },
       new Set(),
@@ -1576,12 +1777,12 @@ it.each(["provider_error", "usage_limit"] as const)(
       projected(command, 1),
       projected(error, 2),
     ]);
-    const feed = deriveThreadFeedPresentation(
+    const feed = deriveTestFeed(
       sourceFeed,
       { runId: RunId.make("newer-run"), status: "completed", startedAt: at, completedAt: at },
       new Set(),
     );
-    const whileWorking = deriveThreadFeedPresentation(
+    const whileWorking = deriveTestFeed(
       sourceFeed,
       { runId: RunId.make("newer-run"), status: "running", startedAt: at, completedAt: null },
       new Set(),
@@ -1807,7 +2008,7 @@ describe("streamed feed updates", () => {
     expandedRunIds: ReadonlySet<RunId>,
     cache?: ThreadFeedCache,
   ) =>
-    deriveThreadFeedPresentation(
+    deriveTestFeed(
       buildThreadFeed(step.items.map(row), { cache }),
       step.latestRun,
       expandedRunIds,

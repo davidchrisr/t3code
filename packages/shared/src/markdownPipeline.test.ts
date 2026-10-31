@@ -2,7 +2,23 @@ import { expect, it } from "vite-plus/test";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
-import { CHAT_MARKDOWN_REHYPE_PLUGINS, CHAT_MARKDOWN_REMARK_PLUGINS } from "./markdownPipeline.ts";
+import {
+  chatMessageHasMarkdownTable,
+  CHAT_MARKDOWN_REHYPE_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+} from "./markdownPipeline.ts";
+
+it.each([
+  ["| Name | Value |\n| --- | --- |\n| A | 1 |", true],
+  ["Name\n:---\nA", true],
+  ["```md\nName\n:---\nA\n```", false],
+  ["> | Name | Value |\n> | --- | --- |\n> | A | 1 |", true],
+  ["```md\n| Name | Value |\n| --- | --- |\n| A | 1 |\n```", false],
+  ["Use `a | b` for alternatives.", false],
+  ["No table here.", false],
+] as const)("detects rendered Markdown tables in %s", (text, expected) => {
+  expect(chatMessageHasMarkdownTable({ text })).toBe(expected);
+});
 
 it("preserves in-app thread links through the shared Markdown sanitizer", () => {
   const processor = unified()

@@ -473,6 +473,7 @@ interface ThreadWorkLogProps {
   readonly workspaceRoot?: string | null | undefined;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
+  readonly alwaysExpandThoughts: boolean;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly scrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
   readonly iconSubtleColor: ColorValue;
@@ -493,7 +494,10 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
       row={row}
       anchorKey={props.anchorKey}
       copied={props.copiedRowId === row.id}
-      expanded={props.expandedRows[row.id] ?? false}
+      expanded={
+        props.expandedRows[row.id] ??
+        (props.alwaysExpandThoughts && row.workEntry.itemType === "reasoning")
+      }
       environmentId={props.environmentId}
       iconSubtleColor={props.iconSubtleColor}
       onCopyRow={props.onCopyRow}
@@ -862,6 +866,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     | "copiedRowId"
     | "edgeFadeColor"
     | "expandedRows"
+    | "alwaysExpandThoughts"
     | "rowSizing"
     | "scrollPositions"
   > & {

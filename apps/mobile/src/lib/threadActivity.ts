@@ -63,6 +63,8 @@ import {
 } from "@t3tools/shared/toolActivity";
 import { claudeResumeCompactionAge } from "@t3tools/shared/claudeCompaction";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { chatMessageHasMarkdownTable } from "@t3tools/shared/markdownPipeline";
+import { DEFAULT_CLIENT_SETTINGS, type ChatExpansionSettings } from "@t3tools/contracts/settings";
 import { truncate } from "@t3tools/shared/String";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
@@ -224,6 +226,7 @@ type ThreadFeedEntryContent =
   | {
       readonly type: "run-fold";
       readonly deferredWorkItemIds?: ReadonlyArray<string>;
+      readonly loadDeferredWork?: true;
       readonly id: string;
       readonly createdAt: string;
       readonly runId: RunId;
@@ -318,6 +321,8 @@ const presentedActivityGroupsCache = new WeakMap<
     readonly activeRunId: RunId | null;
     readonly isWorking: boolean;
     readonly activeTail: boolean;
+    readonly alwaysExpandThoughts: boolean;
+    readonly expandedWorkEntryIds: ReadonlySet<string>;
     readonly rows: ReadonlyArray<ThreadFeedEntry>;
   }
 >();
@@ -1278,7 +1283,10 @@ interface ThreadFeedPresentationBuild {
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly latestRun: ThreadFeedLatestRun | null;
   readonly expandedRunIds: ReadonlySet<RunId>;
+  readonly collapsedRunIds: ReadonlySet<RunId>;
+  readonly chatExpansion: ChatExpansionSettings;
   readonly expandedWorkGroupIds: ReadonlySet<string>;
+  readonly expandedWorkEntryIds: ReadonlySet<string>;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive: boolean;
   readonly rows: ReadonlyArray<ThreadFeedEntry>;
@@ -1323,14 +1331,23 @@ function presentationRestart(
   expandedWorkGroupIds: ReadonlySet<string>,
   activeWorkStartedAt: string | null,
   runlessWorkActive: boolean,
+  chatExpansion: ChatExpansionSettings,
+  collapsedRunIds: ReadonlySet<RunId>,
+  expandedWorkEntryIds: ReadonlySet<string>,
 ): { readonly entry: number; readonly rowsLength: number; readonly index: number } | null {
   if (
     previous === null ||
+    previous.chatExpansion.alwaysExpandTables !== chatExpansion.alwaysExpandTables ||
+    previous.chatExpansion.alwaysExpandThoughts !== chatExpansion.alwaysExpandThoughts ||
+    previous.chatExpansion.autoCollapseCompletedTurns !==
+      chatExpansion.autoCollapseCompletedTurns ||
+    !setsEqual(previous.collapsedRunIds, collapsedRunIds) ||
     !latestRunsEqual(previous.latestRun, latestRun) ||
     previous.activeWorkStartedAt !== activeWorkStartedAt ||
     previous.runlessWorkActive !== runlessWorkActive ||
     !setsEqual(previous.expandedRunIds, expandedRunIds) ||
-    !setsEqual(previous.expandedWorkGroupIds, expandedWorkGroupIds)
+    !setsEqual(previous.expandedWorkGroupIds, expandedWorkGroupIds) ||
+    !setsEqual(previous.expandedWorkEntryIds, expandedWorkEntryIds)
   ) {
     return null;
   }
@@ -1355,7 +1372,13 @@ export function deriveThreadFeedPresentation(
   activeWorkStartedAt: string | null = null,
   runlessWorkActive = false,
   cache?: ThreadFeedCache,
+  chatExpansion: ChatExpansionSettings = DEFAULT_CLIENT_SETTINGS,
+  collapsedRunIds: ReadonlySet<RunId> = new Set(),
+  expandedWorkEntryIds: ReadonlySet<string> = new Set(),
 ): ThreadFeedEntry[] {
+  const turnExpanded = (runId: RunId) =>
+    expandedRunIds.has(runId) ||
+    (!chatExpansion.autoCollapseCompletedTurns && !collapsedRunIds.has(runId));
   const previous = cache?.presentation ?? null;
   const restart = presentationRestart(
     previous,
@@ -1365,6 +1388,9 @@ export function deriveThreadFeedPresentation(
     expandedWorkGroupIds,
     activeWorkStartedAt,
     runlessWorkActive,
+    chatExpansion,
+    collapsedRunIds,
+    expandedWorkEntryIds,
   );
   const start = restart?.entry ?? 0;
   const result: ThreadFeedEntry[] =
@@ -1424,13 +1450,57 @@ export function deriveThreadFeedPresentation(
     failedRunIds,
   );
   const collapsedEntryIds = new Set<string>();
+  const visibleWorkActivitiesByGroup = new Map<string, ReadonlySet<string>>();
+  const sourceEntryById = new Map(sourceFeed.map((entry) => [entry.id, entry]));
   for (const fold of foldsByAnchorId.values()) {
-    if (!expandedRunIds.has(fold.runId)) {
-      for (const entryId of fold.hiddenEntryIds) collapsedEntryIds.add(entryId);
+    if (!turnExpanded(fold.runId)) {
+      for (const entryId of fold.hiddenEntryIds) {
+        const entry = sourceEntryById.get(entryId);
+        if (!collapsedRunIds.has(fold.runId)) {
+          if (
+            chatExpansion.alwaysExpandTables &&
+            entry?.type === "message" &&
+            chatMessageHasMarkdownTable(entry.message)
+          )
+            continue;
+          if (entry?.type === "activity-group") {
+            const anchors = activityGroupAnchors(
+              entry,
+              chatExpansion.alwaysExpandThoughts,
+              expandedWorkEntryIds,
+            );
+            const visibleIds = new Set(
+              entry.activities
+                .filter(
+                  (activity) =>
+                    (chatExpansion.alwaysExpandThoughts &&
+                      activity.workEntry.itemType === "reasoning") ||
+                    expandedWorkEntryIds.has(activity.id) ||
+                    expandedWorkGroupIds.has(
+                      `work-group:${anchors.get(activity.id) ?? activity.id}`,
+                    ),
+                )
+                .map((activity) => activity.id),
+            );
+            if (visibleIds.size > 0) {
+              visibleWorkActivitiesByGroup.set(entryId, visibleIds);
+              continue;
+            }
+          }
+        }
+        collapsedEntryIds.add(entryId);
+      }
     }
   }
   for (let sourceIndex = 0; sourceIndex < sourceFeed.length; sourceIndex += 1) {
-    const entry = sourceFeed[sourceIndex]!;
+    let entry = sourceFeed[sourceIndex]!;
+    const visibleWorkActivities = visibleWorkActivitiesByGroup.get(entry.id);
+    if (visibleWorkActivities && entry.type === "activity-group") {
+      entry = {
+        ...entry,
+        activities: entry.activities.filter((activity) => visibleWorkActivities.has(activity.id)),
+      };
+    }
     const feedIndex = retainedFeedIndices[sourceIndex]!;
     if (isUserMessageEntry(entry)) {
       restarts.push({ entry: feedIndex, rowsLength: result.length });
@@ -1449,7 +1519,14 @@ export function deriveThreadFeedPresentation(
       entry.runId === activeRunId;
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
-      const expanded = expandedRunIds.has(fold.runId);
+      const expanded = turnExpanded(fold.runId);
+      const loadDeferredWork =
+        fold.deferredWorkItemIds?.length &&
+        (chatExpansion.alwaysExpandThoughts ||
+          [...fold.hiddenEntryIds].some((entryId) => visibleWorkActivitiesByGroup.has(entryId))) &&
+        !collapsedRunIds.has(fold.runId)
+          ? true
+          : undefined;
       let row = runFoldRowsCache.get(entry);
       if (
         !row ||
@@ -1457,12 +1534,14 @@ export function deriveThreadFeedPresentation(
         row.createdAt !== fold.createdAt ||
         row.label !== fold.label ||
         row.expanded !== expanded ||
+        row.loadDeferredWork !== loadDeferredWork ||
         row.deferredWorkItemIds?.join("|") !== fold.deferredWorkItemIds?.join("|")
       ) {
         row = {
           type: "run-fold",
           id: `run-fold:${fold.runId}`,
           ...(fold.deferredWorkItemIds ? { deferredWorkItemIds: fold.deferredWorkItemIds } : {}),
+          ...(loadDeferredWork ? { loadDeferredWork } : {}),
           createdAt: fold.createdAt,
           runId: fold.runId,
           label: fold.label,
@@ -1514,6 +1593,8 @@ export function deriveThreadFeedPresentation(
         activeRunId,
         isWorking,
         isActiveTailGroup,
+        chatExpansion.alwaysExpandThoughts,
+        expandedWorkEntryIds,
       );
     }
   }
@@ -1602,7 +1683,10 @@ export function deriveThreadFeedPresentation(
       feed,
       latestRun,
       expandedRunIds,
+      collapsedRunIds,
+      chatExpansion,
       expandedWorkGroupIds,
+      expandedWorkEntryIds,
       activeWorkStartedAt,
       runlessWorkActive,
       rows: result,
@@ -1648,6 +1732,8 @@ function appendPresentedFeedEntry(
   activeRunId: RunId | null,
   isWorking: boolean,
   activeTail: boolean,
+  alwaysExpandThoughts: boolean,
+  expandedWorkEntryIds: ReadonlySet<string>,
 ): void {
   if (entry.type !== "activity-group") {
     result.push(entry);
@@ -1669,18 +1755,70 @@ function appendPresentedFeedEntry(
     cached.activeRunId !== activeRunId ||
     cached.isWorking !== isWorking ||
     cached.activeTail !== activeTail ||
+    cached.alwaysExpandThoughts !== alwaysExpandThoughts ||
+    !setsEqual(cached.expandedWorkEntryIds, expandedWorkEntryIds) ||
     cached.rows.some(
       (row) => row.type === "work-toggle" && expandedWorkGroupIds.has(row.groupId) !== row.expanded,
     )
   ) {
     const rows: ThreadFeedEntry[] = [];
-    appendActivityGroupRows(rows, entry, expandedWorkGroupIds, activeRunId, isWorking, activeTail);
-    cached = { activeRunId, isWorking, activeTail, rows };
+    appendActivityGroupRows(
+      rows,
+      entry,
+      expandedWorkGroupIds,
+      activeRunId,
+      isWorking,
+      activeTail,
+      alwaysExpandThoughts,
+      expandedWorkEntryIds,
+    );
+    cached = {
+      activeRunId,
+      isWorking,
+      activeTail,
+      alwaysExpandThoughts,
+      expandedWorkEntryIds,
+      rows,
+    };
     presentedActivityGroupsCache.set(entry, cached);
   }
   for (const row of cached.rows) {
     result.push(row);
   }
+}
+
+function thoughtHasOwnRow(
+  activity: ThreadFeedActivity,
+  alwaysExpandThoughts: boolean,
+  expandedWorkEntryIds: ReadonlySet<string>,
+) {
+  return (
+    activity.workEntry.itemType === "reasoning" &&
+    (alwaysExpandThoughts || expandedWorkEntryIds.has(activity.id))
+  );
+}
+
+function activityGroupAnchors(
+  entry: ThreadFeedActivityGroup,
+  alwaysExpandThoughts: boolean,
+  expandedWorkEntryIds: ReadonlySet<string>,
+) {
+  const groupAnchorIdByActivityId = new Map<string, string>();
+  let groupAnchorId: string | null = null;
+  for (const activity of entry.activities) {
+    const item = activity.projectedItem.item;
+    if (
+      activity.prominent ||
+      thoughtHasOwnRow(activity, alwaysExpandThoughts, expandedWorkEntryIds) ||
+      (item.type === "error" && item.status === "failed")
+    ) {
+      groupAnchorId = null;
+      continue;
+    }
+    groupAnchorId ??= activity.id;
+    groupAnchorIdByActivityId.set(activity.id, groupAnchorId);
+  }
+  return groupAnchorIdByActivityId;
 }
 
 function appendActivityGroupRows(
@@ -1690,18 +1828,14 @@ function appendActivityGroupRows(
   activeRunId: RunId | null,
   isWorking: boolean,
   activeTail: boolean,
+  alwaysExpandThoughts: boolean,
+  expandedWorkEntryIds: ReadonlySet<string>,
 ): void {
-  const groupAnchorIdByActivityId = new Map<string, string>();
-  let groupAnchorId: string | null = null;
-  for (const activity of entry.activities) {
-    const item = activity.projectedItem.item;
-    if (activity.prominent || (item.type === "error" && item.status === "failed")) {
-      groupAnchorId = null;
-      continue;
-    }
-    groupAnchorId ??= activity.id;
-    groupAnchorIdByActivityId.set(activity.id, groupAnchorId);
-  }
+  const groupAnchorIdByActivityId = activityGroupAnchors(
+    entry,
+    alwaysExpandThoughts,
+    expandedWorkEntryIds,
+  );
   const activities = entry.activities.filter(
     (activity) =>
       threadFeedActivityIsVisible(activity) ||
@@ -1729,7 +1863,12 @@ function appendActivityGroupRows(
   for (const activity of activities) {
     const item = activity.projectedItem.item;
     const severeProviderError = item.type === "error" && item.status === "failed";
-    if (!activity.prominent && !severeProviderError && item.type !== "notification") {
+    if (
+      !activity.prominent &&
+      !severeProviderError &&
+      item.type !== "notification" &&
+      !thoughtHasOwnRow(activity, alwaysExpandThoughts, expandedWorkEntryIds)
+    ) {
       groupableRun.push(activity);
       continue;
     }
