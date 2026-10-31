@@ -23,6 +23,7 @@ import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../times
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
+import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -36,6 +37,13 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
 
   return (
     <>
+      {row.showFinalResponseDivider &&
+      !row.assistantCopyStreaming &&
+      !row.message.voiceTranscript ? (
+        <div role="separator" aria-label="Final response" className="mb-3 mt-5 select-none">
+          <TimelineSystemDivider label="Final response" />
+        </div>
+      ) : null}
       <div className="relative min-w-0 px-1 py-0.5">
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
         {row.message.voiceTranscript ? (

@@ -595,6 +595,7 @@ type MessagesTimelineRowContent =
       message: ChatMessage;
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       showAssistantMeta: boolean;
+      showFinalResponseDivider?: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -1528,8 +1529,11 @@ export function deriveMessagesTimelineRows(input: {
         entry.entry.itemType === "reasoning")
     );
   };
+  const expandedFoldEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
-    if (!turnExpanded(fold.runId)) {
+    if (turnExpanded(fold.runId)) {
+      for (const entryId of fold.entryIds) expandedFoldEntryIds.add(entryId);
+    } else {
       const keepVisible = (entryId: string) => {
         if (input.collapsedRunIds?.has(fold.runId)) return false;
         return entryIsKeptVisible(entryId);
@@ -2107,6 +2111,7 @@ export function deriveMessagesTimelineRows(input: {
         ? {}
         : { projectedItem: timelineEntry.projectedItem }),
       showAssistantMeta,
+      showFinalResponseDivider: showAssistantMeta && expandedFoldEntryIds.has(timelineEntry.id),
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2574,6 +2579,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.message === bm.message &&
         a.projectedItem === bm.projectedItem &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.showFinalResponseDivider === bm.showFinalResponseDivider &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&

@@ -1108,6 +1108,9 @@ describe("deriveMessagesTimelineRows", () => {
     expect(foldRow?.runId).toBe("turn-1");
     expect(foldRow?.expanded).toBe(false);
     expect(foldRow?.label).toBe("Worked for 22s");
+    expect(collapsedRows.find((row) => row.id === "assistant-final-entry")).toMatchObject({
+      showFinalResponseDivider: false,
+    });
     expect(collapsedRows.map((row) => row.id)).toEqual([
       "user-entry",
       "turn-fold:turn-1",
@@ -1133,6 +1136,20 @@ describe("deriveMessagesTimelineRows", () => {
     expect(
       expandedRows.find((row) => row.kind === "turn-fold" && row.expanded === true),
     ).toBeDefined();
+    expect(expandedRows.find((row) => row.id === "assistant-final-entry")).toMatchObject({
+      showFinalResponseDivider: true,
+    });
+    expect(expandedRows.find((row) => row.id === "assistant-first-entry")).toMatchObject({
+      showFinalResponseDivider: false,
+    });
+    let stable = computeStableMessagesTimelineRows(collapsedRows, {
+      result: [],
+      byId: new Map(),
+    });
+    for (const rows of [expandedRows, collapsedRows, expandedRows]) {
+      stable = computeStableMessagesTimelineRows(rows, stable);
+      expect(stable.result).toEqual(rows);
+    }
 
     const input = {
       timelineEntries,
@@ -1148,6 +1165,24 @@ describe("deriveMessagesTimelineRows", () => {
     expect(deriveMessagesTimelineRows(input).map((row) => row.id)).toEqual(
       expandedRows.map((row) => row.id),
     );
+    expect(
+      deriveMessagesTimelineRows(input).find((row) => row.id === "assistant-final-entry"),
+    ).toMatchObject({ showFinalResponseDivider: true });
+    expect(
+      deriveTestRows({
+        ...input,
+        chatExpansion,
+        collapsedRunIds: new Set([RunId.make("turn-1")]),
+      }).find((row) => row.id === "assistant-final-entry"),
+    ).toMatchObject({ showFinalResponseDivider: false });
+    expect(
+      deriveMessagesTimelineRows({
+        ...input,
+        timelineEntries: timelineEntries.filter((entry) =>
+          ["user-entry", "assistant-final-entry"].includes(entry.id),
+        ),
+      }).find((row) => row.id === "assistant-final-entry"),
+    ).toMatchObject({ showFinalResponseDivider: false });
     expect(deriveTestRows({ ...input, chatExpansion }).map((row) => row.id)).toEqual(
       expandedRows.map((row) => row.id),
     );

@@ -197,7 +197,10 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
 };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
+  | (Extract<RawThreadFeedEntry, { type: "message" }> & {
+      readonly showFinalResponseDivider?: true;
+    })
+  | Extract<RawThreadFeedEntry, { type: "html-render" | "mcp-app" }>
   | {
       readonly type: "activity-group";
       readonly id: string;
@@ -309,6 +312,10 @@ const projectedEntriesCache = new WeakMap<
 const localMessageEntriesCache = new WeakMap<
   LocalThreadMessage,
   Extract<RawThreadFeedEntry, { readonly type: "message" }>
+>();
+const finalResponseDividerRows = new WeakMap<
+  Extract<ThreadFeedEntry, { readonly type: "message" }>,
+  Extract<ThreadFeedEntry, { readonly type: "message" }>
 >();
 const activityGroupsCache = new WeakMap<ThreadFeedActivity, ThreadFeedActivityGroup>();
 const failedActivityGroupsCache = new WeakMap<
@@ -1015,6 +1022,7 @@ function threadFeedActivityIsVisible(
 
 interface ThreadFeedRunFold {
   readonly deferredWorkItemIds?: ReadonlyArray<string>;
+  readonly terminalEntryId?: string;
   readonly runId: RunId;
   readonly createdAt: string;
   readonly hiddenEntryIds: ReadonlySet<string>;
@@ -1217,6 +1225,7 @@ function deriveThreadFeedRunFolds(
     );
     foldsByAnchorId.set(firstHiddenEntry.id, {
       ...(deferredWorkItemIds.length > 0 ? { deferredWorkItemIds } : {}),
+      ...(terminalAssistantId ? { terminalEntryId: terminalAssistantId } : {}),
       runId,
       createdAt: firstHiddenEntry.createdAt,
       hiddenEntryIds,
@@ -1452,7 +1461,11 @@ export function deriveThreadFeedPresentation(
   const collapsedEntryIds = new Set<string>();
   const visibleWorkActivitiesByGroup = new Map<string, ReadonlySet<string>>();
   const sourceEntryById = new Map(sourceFeed.map((entry) => [entry.id, entry]));
+  const expandedFinalResponseEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
+    if (turnExpanded(fold.runId) && fold.terminalEntryId) {
+      expandedFinalResponseEntryIds.add(fold.terminalEntryId);
+    }
     if (!turnExpanded(fold.runId)) {
       for (const entryId of fold.hiddenEntryIds) {
         const entry = sourceEntryById.get(entryId);
@@ -1494,6 +1507,14 @@ export function deriveThreadFeedPresentation(
   }
   for (let sourceIndex = 0; sourceIndex < sourceFeed.length; sourceIndex += 1) {
     let entry = sourceFeed[sourceIndex]!;
+    if (entry.type === "message" && expandedFinalResponseEntryIds.has(entry.id)) {
+      let row = finalResponseDividerRows.get(entry);
+      if (!row) {
+        row = { ...entry, showFinalResponseDivider: true };
+        finalResponseDividerRows.set(entry, row);
+      }
+      entry = row;
+    }
     const visibleWorkActivities = visibleWorkActivitiesByGroup.get(entry.id);
     if (visibleWorkActivities && entry.type === "activity-group") {
       entry = {

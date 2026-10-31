@@ -900,6 +900,17 @@ describe("buildThreadFeed", () => {
         deriveTestFeed(feed, null, expanded).map((entry) => entry.id);
       expect(ids(new Set())).not.toContain("message-middle");
       expect(ids(new Set([foldRunId!]))).toContain("message-middle");
+      expect(
+        deriveTestFeed(feed, null, new Set()).find((entry) => entry.id === "message-assistant"),
+      ).not.toHaveProperty("showFinalResponseDivider", true);
+      const expanded = deriveTestFeed(feed, null, new Set([foldRunId!]));
+      expect(expanded.find((entry) => entry.id === "message-assistant")).toMatchObject({
+        showFinalResponseDivider: true,
+      });
+      expect(expanded.find((entry) => entry.id === "message-middle")).not.toHaveProperty(
+        "showFinalResponseDivider",
+        true,
+      );
     }
     expect(messageFoldRunId(buildThreadFeed([projected(userMessage(), 0)]), "message-user")).toBe(
       null,
@@ -964,6 +975,12 @@ describe("buildThreadFeed", () => {
         collapsedRuns,
       );
     expect(present().some((entry) => entry.id === "message-opening")).toBe(true);
+    expect(present().find((entry) => entry.id === "message-assistant")).toMatchObject({
+      showFinalResponseDivider: true,
+    });
+    expect(
+      present(chatExpansion, new Set([runId])).find((entry) => entry.id === "message-assistant"),
+    ).not.toHaveProperty("showFinalResponseDivider", true);
     expect(present(chatExpansion, new Set([runId])).map((entry) => entry.id)).toEqual(
       collapsed.map((entry) => entry.id),
     );

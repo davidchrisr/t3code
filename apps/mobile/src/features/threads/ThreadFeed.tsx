@@ -2180,6 +2180,11 @@ function renderFeedEntry(
         )}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
+        {entry.showFinalResponseDivider ? (
+          <View className="mt-5" accessible accessibilityLabel="Final response">
+            <ThreadContextDivider label="Final response" iconColor={iconSubtleColor} />
+          </View>
+        ) : null}
         {renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
