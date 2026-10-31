@@ -180,6 +180,10 @@ import {
 import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { DEFAULT_CLIENT_SETTINGS, type ChatExpansionSettings } from "@t3tools/contracts/settings";
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/reactivity";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import {
   normalizeNativeMarkdownUrl,
@@ -245,6 +249,7 @@ import {
   useThreadChipIcons,
 } from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
+import { useThreadFeedDisclosures } from "../../state/use-thread-feed-disclosures";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
@@ -1225,6 +1230,7 @@ function RunFoldButton({
 }) {
   const loadWork = useAtomCommand(threadEnvironment.loadEarlierHistory, { reportFailure: false });
   const anchorsKey = entry.deferredWorkItemIds?.join("\n") ?? "";
+  const shouldLoad = entry.expanded || entry.loadDeferredWork === true;
   const [failed, setFailed] = useState(false);
   const load = () => {
     if (!anchorsKey) return;
@@ -1239,15 +1245,15 @@ function RunFoldButton({
     );
   };
   const loadOnExpand = useEffectEvent(load);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restored expanded folds load their deferred server history on mount.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load deferred history for expanded folds and thoughts kept visible inside folded turns.
   useEffect(() => {
-    if (entry.expanded && anchorsKey && environmentId && threadId) loadOnExpand();
-  }, [entry.expanded, anchorsKey, environmentId, threadId]);
+    if (shouldLoad && anchorsKey && environmentId && threadId) loadOnExpand();
+  }, [shouldLoad, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
-  const loading = entry.expanded && anchorsKey !== "" && !failed;
+  const loading = shouldLoad && anchorsKey !== "" && !failed;
   const toggle = () => {
     setFailed(false);
-    if (error && entry.expanded) load();
+    if (error && shouldLoad) load();
     else onToggle(entry.runId);
   };
 
@@ -1308,6 +1314,7 @@ function renderFeedEntry(
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
+    readonly alwaysExpandThoughts: boolean;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1899,6 +1906,7 @@ function renderFeedEntry(
       anchorKey={entry.id}
       copiedRowId={props.copiedRowId}
       expandedRows={props.expandedWorkRows}
+      alwaysExpandThoughts={props.alwaysExpandThoughts}
       rowSizing={props.workRowSizing}
       scrollPositions={props.workGroupScrollPositions}
       iconSubtleColor={iconSubtleColor}
@@ -2155,6 +2163,9 @@ function useThreadFeedPresentation(
   props: ThreadFeedProps,
   expandedTurnIds: ReadonlySet<RunId>,
   expandedWorkGroups: Record<string, boolean>,
+  chatExpansion: ChatExpansionSettings,
+  collapsedTurnIds: ReadonlySet<RunId>,
+  expandedWorkRows: Record<string, boolean>,
 ) {
   const [feedCache] = useState(createThreadFeedCache);
   return appendPendingThreadMessages(
@@ -2170,6 +2181,13 @@ function useThreadFeedPresentation(
       props.activeWorkStartedAt,
       props.runlessWorkActive ?? false,
       feedCache,
+      chatExpansion,
+      collapsedTurnIds,
+      new Set(
+        Object.entries(expandedWorkRows)
+          .filter(([, expanded]) => expanded)
+          .map(([entryId]) => entryId),
+      ),
     ),
     props.feed,
     props.queuedMessages,
@@ -2181,6 +2199,17 @@ export const ThreadFeed = memo(function ThreadFeed({
   ...props
 }: ThreadFeedProps & { readonly ref?: Ref<ThreadFeedHandle> }) {
   const { listRef, onEndFollowEnabledChange, onHeaderMaterialVisibilityChange } = props;
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const storedPreferences = AsyncResult.isSuccess(preferences) ? preferences.value : undefined;
+  const chatExpansion = {
+    alwaysExpandTables:
+      storedPreferences?.alwaysExpandTables ?? DEFAULT_CLIENT_SETTINGS.alwaysExpandTables,
+    alwaysExpandThoughts:
+      storedPreferences?.alwaysExpandThoughts ?? DEFAULT_CLIENT_SETTINGS.alwaysExpandThoughts,
+    autoCollapseCompletedTurns:
+      storedPreferences?.autoCollapseCompletedTurns ??
+      DEFAULT_CLIENT_SETTINGS.autoCollapseCompletedTurns,
+  };
   const workflowOpening = useWorkflowOpening(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);
   const deviceType = useDeviceType();
@@ -2252,18 +2281,10 @@ export const ThreadFeed = memo(function ThreadFeed({
     reflowAnchorRef.current = undefined;
     setReflowFollowsEnd(false);
   };
-  const [interactionState, setInteractionState] = useState<{
-    readonly copiedRowId: string | null;
-    readonly expandedWorkGroups: Record<string, boolean>;
-    readonly expandedWorkRows: Record<string, boolean>;
-    readonly expandedTurnIds: ReadonlySet<RunId>;
-  }>({
-    copiedRowId: null,
-    expandedWorkGroups: {},
-    expandedWorkRows: {},
-    expandedTurnIds: new Set(),
-  });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
+  const [disclosures, setDisclosures] = useThreadFeedDisclosures(feedThreadKey);
+  const { expandedWorkGroups, expandedWorkRows, expandedTurnIds, collapsedTurnIds } = disclosures;
   const markdownLinkRequest = useRef<AbortController | null>(null);
   const onInlinePlaybackStart = () => {
     markdownLinkRequest.current?.abort();
@@ -2717,6 +2738,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
   const listAppearanceData = {
+    alwaysExpandThoughts: chatExpansion.alwaysExpandThoughts,
     worktreeSetup: props.worktreeSetup,
     setupWorkingStartedAt: props.setupWorkingStartedAt,
     dispatchingMessageId: props.dispatchingMessageId,
@@ -2794,7 +2816,6 @@ export const ThreadFeed = memo(function ThreadFeed({
     finishUserScroll();
   };
 
-  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
   const workGroupScrollPositions = new Map<string, ThreadWorkGroupScrollPosition>();
   // ThreadDetailScreen remounts the feed per thread, so only a send resets following.
   useImperativeHandle(ref, () => ({
@@ -2813,7 +2834,14 @@ export const ThreadFeed = memo(function ThreadFeed({
   const { jumpToMessageId } = props;
   const jumpReady = !!jumpToMessageId && loadedListKey === `${feedThreadKey}:filled`;
   const presentedFeed = appendGuestPendingMessages(
-    useThreadFeedPresentation(props, expandedTurnIds, expandedWorkGroups),
+    useThreadFeedPresentation(
+      props,
+      expandedTurnIds,
+      expandedWorkGroups,
+      chatExpansion,
+      collapsedTurnIds,
+      expandedWorkRows,
+    ),
     guestShare,
   );
   const jumpRunId =
@@ -2822,7 +2850,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       ? messageFoldRunId(props.feed, jumpToMessageId)
       : null;
   if (jumpRunId && !expandedTurnIds.has(jumpRunId)) {
-    setInteractionState((current) => ({
+    setDisclosures((current) => ({
       ...current,
       expandedTurnIds: new Set(current.expandedTurnIds).add(jumpRunId),
     }));
@@ -2936,23 +2964,19 @@ export const ThreadFeed = memo(function ThreadFeed({
     }
     return new Set(terminalIdsByTurn.values());
   })();
-  // An interrupted run unfolds; a run that is no longer latest folds back.
+  // Interrupted runs open without overriding the user's choices on other runs.
   const [previousLatestRun, setPreviousLatestRun] = useState(props.latestRun);
   if (previousLatestRun !== props.latestRun) {
     setPreviousLatestRun(props.latestRun);
     const latest = props.latestRun;
     const previous = previousLatestRun;
     if (latest && previous) {
-      if (latest.runId !== previous.runId) {
-        if (expandedTurnIds.has(previous.runId)) {
-          setInteractionState((current) => {
-            const next = new Set(current.expandedTurnIds);
-            next.delete(previous.runId);
-            return { ...current, expandedTurnIds: next };
-          });
-        }
-      } else if (previous.status === "running" && latest.status === "interrupted") {
-        setInteractionState((current) => ({
+      if (
+        latest.runId === previous.runId &&
+        previous.status === "running" &&
+        latest.status === "interrupted"
+      ) {
+        setDisclosures((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(latest.runId),
         }));
@@ -3034,21 +3058,19 @@ export const ThreadFeed = memo(function ThreadFeed({
       target: "thread-work-row",
       feedback: "selection",
     });
-    setInteractionState((current) => ({ ...current, copiedRowId: rowId }));
+    setCopiedRowId(rowId);
     if (copyFeedbackTimeoutRef.current) {
       clearTimeout(copyFeedbackTimeoutRef.current);
     }
     copyFeedbackTimeoutRef.current = setTimeout(() => {
-      setInteractionState((current) =>
-        current.copiedRowId === rowId ? { ...current, copiedRowId: null } : current,
-      );
+      setCopiedRowId((current) => (current === rowId ? null : current));
       copyFeedbackTimeoutRef.current = null;
     }, 1200);
   };
 
   const onToggleWorkGroup = (groupId: string, anchorKey?: string) => {
     suspendEndScrollMaintenanceForDisclosure(anchorKey ?? `work-toggle:${groupId}`);
-    setInteractionState((current) => ({
+    setDisclosures((current) => ({
       ...current,
       expandedWorkGroups: {
         ...current.expandedWorkGroups,
@@ -3060,8 +3082,18 @@ export const ThreadFeed = memo(function ThreadFeed({
   // Lone rows share their group's disclosure state so opened details survive a second call joining.
   const onToggleWorkRow = (rowId: string, anchorKey?: string, groupId?: string) => {
     suspendEndScrollMaintenanceForDisclosure(anchorKey ?? null);
-    setInteractionState((current) => {
-      const expanded = !(current.expandedWorkRows[rowId] ?? false);
+    setDisclosures((current) => {
+      const expanded = !(
+        current.expandedWorkRows[rowId] ??
+        (chatExpansion.alwaysExpandThoughts &&
+          presentedFeed.some(
+            (entry) =>
+              entry.type === "activity-group" &&
+              entry.activities.some(
+                (activity) => activity.id === rowId && activity.workEntry.itemType === "reasoning",
+              ),
+          ))
+      );
       return {
         ...current,
         expandedWorkRows: { ...current.expandedWorkRows, [rowId]: expanded },
@@ -3074,14 +3106,19 @@ export const ThreadFeed = memo(function ThreadFeed({
 
   const onToggleTurnFold = (runId: RunId) => {
     suspendEndScrollMaintenanceForDisclosure(`run-fold:${runId}`);
-    setInteractionState((current) => {
+    setDisclosures((current) => {
       const next = new Set(current.expandedTurnIds);
-      if (next.has(runId)) {
+      const collapsed = new Set(current.collapsedTurnIds);
+      const expanded =
+        next.has(runId) || (!chatExpansion.autoCollapseCompletedTurns && !collapsed.has(runId));
+      if (expanded) {
         next.delete(runId);
+        collapsed.add(runId);
       } else {
         next.add(runId);
+        collapsed.delete(runId);
       }
-      return { ...current, expandedTurnIds: next };
+      return { ...current, expandedTurnIds: next, collapsedTurnIds: collapsed };
     });
   };
 
@@ -3122,7 +3159,12 @@ export const ThreadFeed = memo(function ThreadFeed({
           return undefined;
         }
         return entry.activities.some(
-          (activity) => activity.prominent || expandedWorkRows[activity.id],
+          (activity) =>
+            activity.prominent ||
+            expandedWorkRows[activity.id] ||
+            (expandedWorkRows[activity.id] === undefined &&
+              chatExpansion.alwaysExpandThoughts &&
+              activity.workEntry.itemType === "reasoning"),
         )
           ? undefined
           : collapsedWorkLogHeight(entry.activities, entry.continuesWorkLog);
@@ -3169,6 +3211,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             threadId: props.threadId,
             copiedRowId,
             expandedWorkRows,
+            alwaysExpandThoughts: chatExpansion.alwaysExpandThoughts,
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,

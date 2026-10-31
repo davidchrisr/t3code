@@ -309,6 +309,22 @@ describe("ClientSettings notifications", () => {
   });
 });
 
+describe("ClientSettings chat expansion", () => {
+  it("expands tables, thoughts, and completed turns when saved preferences omit the settings", () => {
+    expect(decodeClientSettings({})).toMatchObject({
+      alwaysExpandTables: true,
+      alwaysExpandThoughts: true,
+      autoCollapseCompletedTurns: false,
+    });
+    const saved = {
+      alwaysExpandTables: false,
+      alwaysExpandThoughts: false,
+      autoCollapseCompletedTurns: true,
+    };
+    expect(decodeClientSettings(saved)).toMatchObject(saved);
+  });
+});
+
 describe("ClientSettings quit confirmation", () => {
   it.each([
     [true, "hold"],

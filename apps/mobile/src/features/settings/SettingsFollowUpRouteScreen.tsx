@@ -10,6 +10,8 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { ListChoiceRow as SettingsChoiceRow } from "../../components/ui/ListChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 
 const FOLLOW_UP_OPTIONS: ReadonlyArray<{
   readonly behavior: FollowUpBehavior;
@@ -45,6 +47,40 @@ export function SettingsFollowUpRouteScreen() {
       contentContainerClassName="gap-3 px-5 pt-4"
       contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
     >
+      <SettingsSection title="Message expansion">
+        {(
+          [
+            {
+              key: "alwaysExpandTables",
+              label: "Always expand Markdown tables",
+              subtitle: "Keep table messages visible when completed turns automatically collapse.",
+            },
+            {
+              key: "alwaysExpandThoughts",
+              label: "Always expand thoughts",
+              subtitle: "Show live and completed thoughts in full.",
+            },
+            {
+              key: "autoCollapseCompletedTurns",
+              label: "Automatically collapse completed turns",
+              subtitle: "Fold earlier messages and activity when a turn finishes.",
+            },
+          ] as const
+        ).map(({ key, label, subtitle }) => (
+          <SettingsSwitchRow
+            key={key}
+            label={label}
+            subtitle={subtitle}
+            disabled={!preferencesReady}
+            value={
+              AsyncResult.isSuccess(preferencesResult)
+                ? (preferencesResult.value[key] ?? DEFAULT_CLIENT_SETTINGS[key])
+                : DEFAULT_CLIENT_SETTINGS[key]
+            }
+            onValueChange={(value) => savePreferences({ [key]: value })}
+          />
+        ))}
+      </SettingsSection>
       <SettingsSection title="While the agent is running">
         {FOLLOW_UP_OPTIONS.map((option, index) => (
           <SettingsChoiceRow
