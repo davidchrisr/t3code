@@ -9,6 +9,7 @@ import {
   preventRepeatedTerminalCloseShortcut,
   preventTerminalCloseShortcut,
 } from "../../lib/terminalCloseShortcut";
+import { isInSideChatPane } from "../../lib/sideChatPane";
 import { getTerminalFocusOwner, type TerminalFocusOwner } from "../../lib/terminalFocus";
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import type { BranchToolbarHandle } from "../BranchToolbar";
@@ -25,6 +26,12 @@ export type ChatShortcutCommands = Partial<Record<KeybindingCommand, ChatShortcu
 
 interface ChatShortcutsInput {
   readonly enabled: boolean;
+  /**
+   * A side chat inside another chat leaves the window to the outer chat. It runs only
+   * composer chords, for keys pressed inside `composerElement`.
+   */
+  readonly embedded?: boolean;
+  readonly composerElement?: HTMLElement | null;
   readonly keybindings: ResolvedKeybindingsConfig;
   readonly scriptKeybindings: ResolvedKeybindingsConfig;
   readonly getShortcutContext: (target: EventTarget | null) => ShortcutMatchContext & {
@@ -46,11 +53,13 @@ interface ChatShortcutsInput {
  * act on the current render without re-registering on every change.
  */
 export function useChatShortcuts(input: ChatShortcutsInput) {
+  const embedded = input.embedded === true;
+  const composerElement = embedded ? (input.composerElement ?? null) : null;
   const readContext = useStableCallback(input.getShortcutContext);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish the mounted chat's live context to global shortcut handlers.
   useLayoutEffect(() => {
-    if (input.enabled) return activeChatShortcutContext.register(readContext);
-  }, [input.enabled, readContext]);
+    if (input.enabled && !embedded) return activeChatShortcutContext.register(readContext);
+  }, [embedded, input.enabled, readContext]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Notify native shortcut forwarding when React changes the active chat context.
   useLayoutEffect(() => activeChatShortcutContext.refresh());
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
@@ -64,7 +73,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       event.stopPropagation();
       return;
     }
-    if (!input.enabled || isCommandPaletteOpen()) return;
+    if (!input.enabled || isCommandPaletteOpen() || isInSideChatPane(event.target)) return;
     const terminalFocusOwner = getTerminalFocusOwner();
     if (event.defaultPrevented && terminalFocusOwner === null) return;
     const shortcutContext = input.getShortcutContext(event.target);
@@ -99,7 +108,8 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
-      isCommandPaletteOpen()
+      isCommandPaletteOpen() ||
+      isInSideChatPane(event.target)
     )
       return;
     const context = input.getShortcutContext(event.target);
@@ -107,8 +117,26 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     input.closeThreadFind();
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown listeners for chat shortcuts and find dismissal for the component's lifetime
+  const handleComposerShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || isCommandPaletteOpen()) return;
+    const command = resolveChatShortcutCommand(event, input.keybindings, input.scriptKeybindings, {
+      context: input.getShortcutContext(event.target),
+    });
+    const run = command
+      ? composerShortcutCommands(input.composerRef, input.branchToolbarRef)[command]
+      : undefined;
+    if (!run || run({ event, terminalFocusOwner: null }) === false) return;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches keydown listeners for chat shortcuts and find dismissal: on the window, or on an embedded chat's composer
   useEffect(() => {
+    if (embedded) {
+      if (composerElement === null) return;
+      const onComposerKeyDown = (event: KeyboardEvent) => handleComposerShortcut(event);
+      composerElement.addEventListener("keydown", onComposerKeyDown, true);
+      return () => composerElement.removeEventListener("keydown", onComposerKeyDown, true);
+    }
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);
     const onKeyDown = (event: KeyboardEvent) => dismissFind(event);
     window.addEventListener("keydown", onKeyDownCapture, true);
@@ -117,5 +145,5 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       window.removeEventListener("keydown", onKeyDownCapture, true);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [composerElement, embedded]);
 }
