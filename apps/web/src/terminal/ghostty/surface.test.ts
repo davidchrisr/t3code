@@ -634,17 +634,74 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(surface.getSelection()).toBe("row 6\nrow 7\nrow 8");
   });
 
+  describe.each(["MacIntel", "Win32", "Linux x86_64"])("terminal links on %s", (platform) => {
+    it.each([
+      { kind: "URL", output: "https://t3.codes", target: "https://t3.codes" },
+      { kind: "path", output: "/repo/file.ts", target: "/repo/file.ts" },
+      {
+        kind: "explicit hyperlink",
+        output: "\x1b]8;;https://t3.codes\x1b\\T3 Code\x1b]8;;\x1b\\",
+        target: "https://t3.codes",
+      },
+    ])("requires the platform modifier to open a $kind", async ({ output, target }) => {
+      vi.stubGlobal("navigator", { platform });
+      const harness = createHarness();
+      const onLinkActivate = vi.fn();
+      const surface = await harness.create({ onLinkActivate });
+      const mac = platform === "MacIntel";
+      const modifier = mac ? { metaKey: true } : { ctrlKey: true };
+      const wrongModifier = mac ? { ctrlKey: true } : { metaKey: true };
+      surface.write(output);
+      harness.flushFrame();
+
+      // Separate click positions keep multi-click selection from suppressing activation.
+      for (const [x, modifiers] of [
+        [5, {}],
+        [13, wrongModifier],
+        [21, { ctrlKey: true, metaKey: true }],
+      ] as const) {
+        harness.pointer("pointerdown", x, 1, modifiers);
+        harness.pointer("pointerup", x, 0, modifiers);
+      }
+      harness.touch("pointerdown", 5);
+      harness.touch("pointerup", 5);
+      expect(onLinkActivate).not.toHaveBeenCalled();
+
+      harness.pointer("pointermove", 5, 0);
+      expect(surface.canvas.title).toBe(`${target}\n${mac ? "Cmd" : "Ctrl"}+click to open`);
+      harness.pointer("pointerleave", 5, 0);
+      expect(surface.canvas.title).toBe("");
+
+      harness.pointer("pointerdown", 5, 1);
+      harness.pointer("pointermove", 45, 1);
+      harness.pointer("pointerup", 45, 0);
+      expect(surface.getSelection()).not.toBe("");
+      expect(onLinkActivate).not.toHaveBeenCalled();
+
+      harness.pointer("pointerdown", 13, 1, modifier);
+      harness.pointer("pointerup", 13, 0);
+      harness.pointer("pointerdown", 21, 1, modifier);
+      harness.pointer("pointercancel", 21, 0, modifier);
+      expect(onLinkActivate).not.toHaveBeenCalled();
+
+      harness.pointer("pointerdown", 29, 1, modifier);
+      harness.pointer("pointerup", 29, 0, modifier);
+      expect(onLinkActivate).toHaveBeenCalledExactlyOnceWith(target, expect.any(Event));
+    });
+  });
+
   it("does not activate a link replaced before pointer release", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
     const harness = createHarness();
     const onLinkActivate = vi.fn();
     const surface = await harness.create({ onLinkActivate });
     surface.write("https://first.example");
     harness.flushFrame();
 
-    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerdown", 5, 1, { ctrlKey: true });
     surface.write("\x1b[2J\x1b[Hhttps://second.example");
     harness.flushFrame();
-    harness.pointer("pointerup", 5, 0);
+    harness.pointer("pointerup", 5, 0, { ctrlKey: true });
 
     expect(onLinkActivate).not.toHaveBeenCalled();
   });

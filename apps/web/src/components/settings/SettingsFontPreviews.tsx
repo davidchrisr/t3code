@@ -218,6 +218,7 @@ export function TerminalFontPreview({ family, size }: { family: string; size: nu
       onSelectionChange: noop,
       beforeKey: (event) => event.key !== "Tab",
       onLinkActivate: noop,
+      canActivateLink: () => false,
     }).then((next) => {
       if (cancelled) {
         next.dispose();

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { GhosttyTerminalSurface } from "../../terminal/ghostty/surface";
 import { ensureLocalApi } from "../../localApi";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { isTerminalUrl } from "../../terminal-links";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
 
 export default function ProviderAuthTerminal({
@@ -38,11 +39,11 @@ export default function ProviderAuthTerminal({
       onResize: (cols, rows) => respond({ type: "terminal", data: "", size: { cols, rows } }),
       onSelectionChange: () => {},
       beforeKey: (event) => event.key !== "Tab",
+      canActivateLink: isTerminalUrl,
       onLinkActivate: (url) => {
-        if (/^https?:\/\//i.test(url))
-          void ensureLocalApi()
-            .shell.openExternal(url)
-            .catch(() => setError("Could not open the provider link."));
+        void ensureLocalApi()
+          .shell.openExternal(url)
+          .catch(() => setError("Could not open the provider link."));
       },
     })
       .then((terminal) => {
