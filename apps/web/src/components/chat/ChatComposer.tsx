@@ -1,7 +1,7 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { ComposerKeyboardBar, isComposerKeyboardFocusTarget } from "./ComposerKeyboardBar";
 import type { ComposerKeyboardAction } from "~/composer-keyboard";
-import { VoiceControls } from "./VoiceControls";
+import { ComposerVoiceButton, VoiceControls, useVoiceControls } from "./VoiceControls";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { BackgroundThreadContext } from "./backgroundThread";
@@ -292,6 +292,7 @@ function consumePasteAsTextShortcut(deadline: { current: number }): boolean {
 const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
 
 export interface ChatComposerHandle {
+  toggleVoice: () => boolean;
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   addDroppedFiles: (files: File[]) => void;
@@ -931,6 +932,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
+  const voiceThread = activeThread ?? props.activeThreadShell;
+  const voiceProvider = providerStatuses.find(
+    (provider) =>
+      provider.instanceId === (voiceThread?.modelSelection.instanceId ?? selectedInstanceId),
+  );
+  const {
+    active: voiceActive,
+    availability: voiceAvailability,
+    toggleVoice,
+  } = useVoiceControls({
+    environmentId,
+    threadId: activeThreadId,
+    provider: voiceProvider?.driver,
+    hasSession: voiceThread?.activeProviderThreadId != null,
+    thread: voiceThread,
+    canOperateThread,
+    unavailableReason:
+      environmentUnavailable === null
+        ? null
+        : "Reconnect to the environment before starting voice.",
+    keybindings,
+  });
+  const voiceButton =
+    voiceActive || voiceAvailability.kind !== "unsupported" ? (
+      <ComposerVoiceButton
+        active={voiceActive}
+        disabledReason={
+          !voiceActive && voiceAvailability.kind === "unavailable" ? voiceAvailability.reason : null
+        }
+        onToggle={toggleVoice}
+      />
+    ) : null;
   const selectedProviderSkills = selectedProviderStatus
     ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
     : NO_PROVIDER_SKILLS;
@@ -1139,6 +1172,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sideChatAvailable: props.sideChatAvailable === true,
     sideChatDisabledReason: props.sideChatDisabledReason ?? null,
     compactSlashCommandAvailable,
+    voiceSlashCommand:
+      voiceAvailability.kind === "unsupported" && !voiceActive
+        ? null
+        : voiceActive
+          ? "stop"
+          : "start",
     selectedProvider,
     selectedProviderSkills,
     selectedProviderSlashCommands,
@@ -1855,6 +1894,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return;
     }
     if (item.type === "slash-command") {
+      if (item.command === "voice") {
+        if (!toggleVoice()) return;
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) setComposerHighlightedItemId(null);
+        return;
+      }
       if (item.command === "model") {
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -2791,6 +2838,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useImperativeHandle(
     composerRef,
     () => ({
+      toggleVoice,
       focusAtEnd: () => {
         composerEditorRef.current?.focusAtEnd();
       },
@@ -3049,6 +3097,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       interactionMode,
       planModeUiEnabled,
       compactThreadContextStable,
+      toggleVoice,
     ],
   );
 
@@ -3160,15 +3209,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     >
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
-          {selectedProvider === "codex" && activeThreadId !== null && routeKind === "server" ? (
-            <VoiceControls
-              environmentId={environmentId}
-              threadId={activeThreadId}
-              keybindings={keybindings}
-              disabled={
-                !canOperateThread || props.activeThreadShell?.activeProviderThreadId == null
-              }
-            />
+          {activeThreadId !== null && routeKind === "server" ? (
+            <VoiceControls environmentId={environmentId} threadId={activeThreadId} />
           ) : null}
           <ComposerBannerStack items={shelfItems} />
           {showComposerTopDrawer ? (
@@ -3472,6 +3514,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   >
                     {composerControls}
                   </div>
+                  {voiceButton}
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
@@ -3550,6 +3593,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     )}
                   >
                     {composerControls}
+                    {voiceButton}
                   </div>
                 </div>
               </div>

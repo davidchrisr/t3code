@@ -85,7 +85,8 @@ import {
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import { useAtomValue } from "@effect/atom-react";
-import { voiceMode, useVoiceState } from "../voice/voiceMode";
+import { toggleThreadVoice, voiceMode, useVoiceState } from "../voice/voiceMode";
+import { resolveVoiceAvailability, voiceBrowserSupport } from "../voice/voiceAvailability";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
@@ -473,6 +474,25 @@ function OpenCommandPaletteDialog(props: {
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
+  const voiceProvider =
+    activeThread === null
+      ? undefined
+      : providersByEnvironment
+          .get(activeThread.environmentId)
+          ?.find((provider) => provider.instanceId === activeThread.modelSelection.instanceId);
+  const voiceAvailability = resolveVoiceAvailability({
+    provider: voiceProvider?.driver,
+    hasSession: activeThread?.activeProviderThreadId != null,
+    permitted: canStartVoice,
+    unavailableReason:
+      activeThread !== null &&
+      environments.find((environment) => environment.environmentId === activeThread.environmentId)
+        ?.connection.phase !== "connected"
+        ? "Reconnect to the environment before starting voice."
+        : null,
+    thread: activeThread,
+    ...voiceBrowserSupport(),
+  });
   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
   const currentView = viewStack.at(-1)?.view ?? null;
   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
@@ -1368,16 +1388,7 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "voice.toggleMute",
       run: async () => voiceMode.toggleMute(),
     });
-  } else if (
-    activeThread !== null &&
-    providersByEnvironment
-      .get(activeThread.environmentId)
-      ?.some(
-        (provider) =>
-          provider.instanceId === activeThread.modelSelection.instanceId &&
-          provider.driver === "codex",
-      )
-  ) {
+  } else if (activeThread !== null && voiceAvailability.kind !== "unsupported") {
     const thread = activeThread;
     actionItems.push({
       kind: "action",
@@ -1385,11 +1396,13 @@ function OpenCommandPaletteDialog(props: {
       title: "Start voice conversation",
       searchTerms: ["voice", "talk", "speak", "microphone"],
       icon: <MicIcon className={ITEM_ICON_CLASS} />,
-      disabled:
-        !canStartVoice || thread.runtime === null || typeof RTCPeerConnection === "undefined",
+      disabled: voiceAvailability.kind !== "ready",
       shortcutCommand: "voice.toggle",
       run: async () => {
-        await voiceMode.start({ environmentId: thread.environmentId, threadId: thread.id });
+        toggleThreadVoice(
+          { environmentId: thread.environmentId, threadId: thread.id },
+          voiceAvailability,
+        );
       },
     });
   }

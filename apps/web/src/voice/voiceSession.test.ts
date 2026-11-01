@@ -59,11 +59,26 @@ function setup(microphone?: () => Promise<MediaStream>) {
     },
   );
   const createPeer = vi.fn(() => peer as unknown as RTCPeerConnection);
+  const meter = {
+    ready: Promise.resolve(),
+    setMicrophone: vi.fn(),
+    setSpeaker: vi.fn(),
+    setMuted: vi.fn(),
+    start: vi.fn(async () => undefined),
+    pause: vi.fn(),
+    stop: vi.fn(async () => undefined),
+  };
+  let publishLevels: ((levels: { microphone: number; speaker: number }) => void) | undefined;
+  const metering = vi.fn((publish: (levels: { microphone: number; speaker: number }) => void) => {
+    publishLevels = publish;
+    return meter;
+  });
   const session = new VoiceSession({
     microphone: microphone ?? (async () => mic),
     peer: createPeer,
     audio: () => audio as unknown as HTMLAudioElement,
     open,
+    metering,
   });
   return {
     session,
@@ -73,6 +88,9 @@ function setup(microphone?: () => Promise<MediaStream>) {
     audio,
     open,
     createPeer,
+    meter,
+    metering,
+    publishLevels: (levels: { microphone: number; speaker: number }) => publishLevels?.(levels),
     emit: (event: ProviderVoiceSessionEvent) => onEvent?.(event),
   };
 }
@@ -116,6 +134,40 @@ it("sends only the offer through T3 and releases capture, playback, and the stre
   expect(fake.peer.close).toHaveBeenCalledOnce();
   expect(fake.audio.pause).toHaveBeenCalledOnce();
   expect(fake.audio.srcObject).toBeNull();
+  expect(fake.meter.stop).toHaveBeenCalledOnce();
+  const receiveLevels = vi.fn();
+  const unsubscribe = fake.session.subscribeLevels(receiveLevels);
+  fake.publishLevels({ microphone: 0.8, speaker: 0.9 });
+  expect(receiveLevels).toHaveBeenLastCalledWith({ microphone: 0, speaker: 0 });
+  unsubscribe();
+});
+
+it("publishes levels independently of conversation state and pauses metering while hidden", async () => {
+  const fake = setup();
+  const receiveState = vi.fn();
+  const receiveLevels = vi.fn();
+  const unsubscribeState = fake.session.subscribe(receiveState);
+  const unsubscribeLevels = fake.session.subscribeLevels(receiveLevels);
+  await fake.session.start(target);
+  fake.peer.connectionState = "connected";
+  fake.peer.onconnectionstatechange?.call(
+    fake.peer as unknown as RTCPeerConnection,
+    new Event("connectionstatechange"),
+  );
+  expect(fake.meter.start).toHaveBeenCalledOnce();
+  receiveState.mockClear();
+  fake.publishLevels({ microphone: 0.25, speaker: 0.5 });
+  expect(receiveLevels).toHaveBeenLastCalledWith({ microphone: 0.25, speaker: 0.5 });
+  expect(receiveState).not.toHaveBeenCalled();
+  fake.session.setMeteringVisible(false);
+  expect(fake.meter.pause).toHaveBeenCalledOnce();
+  fake.session.setMeteringVisible(true);
+  expect(fake.meter.start).toHaveBeenCalledTimes(2);
+  fake.session.toggleMute();
+  expect(fake.meter.setMuted).toHaveBeenLastCalledWith(true);
+  fake.session.stop();
+  unsubscribeLevels();
+  unsubscribeState();
 });
 
 it("honors mute while microphone permission is still pending", async () => {
@@ -128,6 +180,19 @@ it("honors mute while microphone permission is still pending", async () => {
   expect(fake.track.enabled).toBe(false);
   expect(fake.session.getState().muted).toBe(true);
   fake.session.stop();
+});
+
+it("releases capture and surfaces metering startup failures", async () => {
+  const fake = setup();
+  fake.meter.ready = Promise.reject(new Error("Audio context was blocked."));
+  await fake.session.start(target);
+  expect(fake.session.getState()).toMatchObject({
+    phase: "idle",
+    error: "Audio context was blocked.",
+  });
+  expect(fake.track.stop).toHaveBeenCalledOnce();
+  expect(fake.meter.stop).toHaveBeenCalledOnce();
+  expect(fake.createPeer).not.toHaveBeenCalled();
 });
 
 it("ends local capture when the server closes the voice session", async () => {
@@ -154,8 +219,12 @@ it("does not let a stale permission result replace the new conversation", async 
     peer: () => fake.peer as unknown as RTCPeerConnection,
     audio: () => fake.audio as unknown as HTMLAudioElement,
     open: fake.open,
+    metering: fake.metering,
   });
   const first = session.start(target);
+  const stalePublish = fake.metering.mock.calls[0]![0];
+  const receiveLevels = vi.fn();
+  const unsubscribe = session.subscribeLevels(receiveLevels);
   const next = { ...target, threadId: ThreadId.make("other-thread") };
   await session.start(next);
   permission.resolve({ getTracks: () => [staleTrack] } as unknown as MediaStream);
@@ -164,5 +233,8 @@ it("does not let a stale permission result replace the new conversation", async 
   expect(fake.track.stop).not.toHaveBeenCalled();
   expect(fake.open).toHaveBeenCalledTimes(1);
   expect(session.getState().target).toEqual(next);
+  stalePublish({ microphone: 1, speaker: 1 });
+  expect(receiveLevels).toHaveBeenLastCalledWith({ microphone: 0, speaker: 0 });
   session.stop();
+  unsubscribe();
 });
