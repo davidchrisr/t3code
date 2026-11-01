@@ -101,8 +101,9 @@ spend limit to continue sooner.
 
 ## Talk with Codex
 
-After sending a message in a Codex thread, choose **Start voice conversation**
-to talk through the work. Use `/voice` to start or stop the conversation.
+Select a Codex model, then choose **Start voice conversation** to talk through
+the work. You can start in a new thread without sending a text message first.
+Use `/voice` to start or stop the conversation.
 Start, stop, and mute are also available in the command palette. Voice is
 experimental and requires a Codex build and account with voice access.
 

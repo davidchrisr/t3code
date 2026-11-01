@@ -33,7 +33,7 @@ export function useVoiceControls(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
   readonly provider: ProviderDriverKind | undefined;
-  readonly hasSession: boolean;
+  readonly prepareThread?: (signal: AbortSignal) => Promise<void>;
   readonly canOperateThread: boolean;
   readonly unavailableReason: string | null;
   readonly keybindings: ResolvedKeybindingsConfig;
@@ -47,7 +47,7 @@ export function useVoiceControls(props: {
   const active = phase !== "idle";
   const availability = resolveVoiceAvailability({
     provider: props.provider,
-    hasSession: props.hasSession && props.threadId !== null,
+    hasThread: props.threadId !== null,
     permitted: permitted && props.canOperateThread,
     unavailableReason: props.unavailableReason,
     thread: props.thread ?? null,
@@ -59,6 +59,7 @@ export function useVoiceControls(props: {
         ? null
         : { environmentId: props.environmentId, threadId: props.threadId },
       availability,
+      props.prepareThread,
     ),
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release microphone capture when its owning composer changes thread or unmounts.
@@ -73,7 +74,7 @@ export function useVoiceControls(props: {
     },
     [props.environmentId, props.threadId],
   );
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release capture when the environment revokes access or the thread loses its provider session.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Release capture when the environment revokes access or the selected provider becomes unavailable.
   useEffect(() => {
     if (active && availability.kind !== "ready") voiceMode.stop();
   }, [active, availability.kind]);

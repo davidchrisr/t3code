@@ -1,6 +1,7 @@
 import {
   CommandId,
   type OrchestrationV2Run,
+  type OrchestrationV2AppThread,
   OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
   OrchestrationV2StoredEvent,
@@ -66,8 +67,15 @@ export class EventSinkStreamError extends Schema.TaggedError<EventSinkStreamErro
 export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
 export type EventSinkV2Error = typeof EventSinkV2Error.Type;
 
+interface ThreadStateWriteGuard {
+  readonly thread: OrchestrationV2AppThread;
+  readonly providerThread: OrchestrationV2ProviderThread | null;
+}
+
 export interface EventSinkV2Shape {
   readonly write: (input: {
+    /** Return no events if the thread or its active provider thread changed before commit. */
+    readonly ifThreadUnchanged?: ThreadStateWriteGuard;
     /** Return no events if another thread owns this native session at commit time. */
     readonly unlessNativeThreadOwned?: Pick<
       OrchestrationV2ProviderThread,
@@ -78,6 +86,7 @@ export interface EventSinkV2Shape {
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeWithEffects: (input: {
+    readonly ifThreadUnchanged?: ThreadStateWriteGuard;
     /**
      * Rebuilds each run.updated from the stored row with only its delegatedCompletion replaced.
      * The batch must not also change that run's lifecycle.
@@ -418,6 +427,26 @@ const layerBase: Layer.Layer<
 
       const { committed } = yield* commitThenPublish(
         Effect.gen(function* () {
+          if (input.ifThreadUnchanged) {
+            const expected = input.ifThreadUnchanged;
+            const expectedJson = yield* ProjectionStore.encodeThreadPayload(expected.thread);
+            const threads = yield* sql<{ readonly payload_json: string }>`
+              SELECT payload_json FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${expected.thread.id} LIMIT 1
+            `;
+            if (threads[0]?.payload_json !== expectedJson) return { committed: [], outcomes: [] };
+            if (expected.providerThread !== null) {
+              const providerJson = yield* ProjectionStore.encodeProviderThreadPayload(
+                expected.providerThread,
+              );
+              const providers = yield* sql<{ readonly payload_json: string }>`
+                SELECT payload_json FROM orchestration_v2_projection_provider_threads
+                WHERE provider_thread_id = ${expected.providerThread.id} LIMIT 1
+              `;
+              if (providers[0]?.payload_json !== providerJson)
+                return { committed: [], outcomes: [] };
+            }
+          }
           // Check ownership in the same transaction that claims the native session.
           const imported = input.unlessNativeThreadOwned;
           if (imported?.nativeThreadRef != null) {

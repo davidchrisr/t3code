@@ -21,10 +21,12 @@ it.each(["too-long", "provider"] as const)(
 );
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((complete) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((complete, fail) => {
     resolve = complete;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function setup(microphone?: () => Promise<MediaStream>) {
@@ -94,6 +96,29 @@ function setup(microphone?: () => Promise<MediaStream>) {
     emit: (event: ProviderVoiceSessionEvent) => onEvent?.(event),
   };
 }
+
+it.each(["ready", "stopped", "failed"] as const)(
+  "prepares the thread before microphone capture: %s",
+  async (outcome) => {
+    const preparation = deferred<void>();
+    const microphone = vi.fn<() => Promise<MediaStream>>();
+    const fake = setup(microphone);
+    microphone.mockResolvedValue(fake.mic);
+    const prepare = vi.fn((_signal: AbortSignal) => preparation.promise);
+    const starting = fake.session.start(target, prepare);
+    expect(fake.session.getState().phase).toBe("connecting");
+    expect(microphone).not.toHaveBeenCalled();
+    if (outcome === "stopped") fake.session.stop();
+    expect(prepare.mock.calls[0]?.[0].aborted).toBe(outcome === "stopped");
+    if (outcome === "failed") preparation.reject(new Error("Could not prepare the workspace."));
+    else preparation.resolve();
+    await starting;
+    expect(microphone).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
+    if (outcome === "failed")
+      expect(fake.session.getState().error).toBe("Could not prepare the workspace.");
+    fake.session.stop();
+  },
+);
 
 it("releases a microphone permission result that arrives after Stop", async () => {
   const permission = deferred<MediaStream>();

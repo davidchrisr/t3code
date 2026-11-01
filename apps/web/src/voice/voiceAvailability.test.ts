@@ -4,7 +4,7 @@ import { isVoiceCommand, resolveVoiceAvailability } from "./voiceAvailability";
 
 const ready = {
   provider: ProviderDriverKind.make("codex"),
-  hasSession: true,
+  hasThread: true,
   permitted: true,
   browserSupported: true,
   microphoneAvailable: true,
@@ -13,7 +13,7 @@ const ready = {
 
 it.each([
   [{ provider: ProviderDriverKind.make("claude") }, { kind: "unsupported" }],
-  [{ hasSession: false }, { kind: "unavailable", reason: "Send a message before starting voice." }],
+  [{ hasThread: false }, { kind: "unavailable", reason: "Select a thread before starting voice." }],
   [
     { permitted: false },
     { kind: "unavailable", reason: "You do not have permission to start voice." },

@@ -1,4 +1,5 @@
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
+import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import {
@@ -43,7 +44,7 @@ import {
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   type DesktopWslState,
-  type EnvironmentId,
+  EnvironmentId,
   type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -102,8 +103,9 @@ import {
   copyPromptLink,
   promptLinkRepositoryOf,
 } from "./promptLinks/copyPromptLink";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { useNowMinute } from "../hooks/useNowMinute";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
@@ -124,7 +126,13 @@ import {
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  useProjects,
+  useQuietThreadProjection,
+  useServerConfigs,
+  useThreadShells,
+  waitForProject,
+} from "../state/entities";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
   appendBrowsePathSegment,
@@ -187,6 +195,7 @@ import {
   createCommandPaletteSearchState,
   type CommandPaletteGroup,
   resolveAddProjectEntry,
+  resolveCommandPaletteVoiceProvider,
   type AddProjectCloneFlow,
   type AddProjectEnvironmentOption,
   buildPaletteRemoteSourceReadiness,
@@ -243,6 +252,7 @@ import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -376,6 +386,13 @@ function OpenCommandPaletteDialog(props: {
   ) => void;
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
+  const composerHandleRef = useComposerHandleContext();
+  const startComposerVoice = useStableCallback(() => {
+    const composer = composerHandleRef?.current;
+    if (!composer) return false;
+    composer.toggleVoice();
+    return true;
+  });
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
@@ -436,6 +453,24 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
+  const draftVoiceProviderId = useComposerDraftStore((store) =>
+    paletteRouteTarget === null
+      ? null
+      : (store.getComposerDraft(
+          paletteRouteTarget.kind === "server"
+            ? paletteRouteTarget.threadRef
+            : paletteRouteTarget.draftId,
+        )?.activeProvider ?? null),
+  );
+  const voiceThread = activeThread ?? activeDraftThread;
+  const voiceThreadProjection = useQuietThreadProjection(
+    activeThread === null ? null : scopeThreadRef(activeThread.environmentId, activeThread.id),
+  );
+  const voiceSettings = useEnvironmentSettings(
+    voiceThread?.environmentId ??
+      primaryEnvironmentId ??
+      EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID),
+  );
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -454,7 +489,7 @@ function OpenCommandPaletteDialog(props: {
   );
   const voiceState = useVoiceState();
   const canStartVoice = useAtomValue(
-    threadEnvironment.voiceSession.permissionAtom(activeThread?.environmentId ?? null),
+    threadEnvironment.voiceSession.permissionAtom(voiceThread?.environmentId ?? null),
   );
   const activeThreadReferenceCopyTarget =
     referenceThreadRef === null || (pathname === "/pull-requests" && !openPanelPullRequestUrl)
@@ -474,22 +509,39 @@ function OpenCommandPaletteDialog(props: {
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
+  const nowMinute = useNowMinute();
   const voiceProvider =
-    activeThread === null
+    voiceThread === null
       ? undefined
-      : providersByEnvironment
-          .get(activeThread.environmentId)
-          ?.find((provider) => provider.instanceId === activeThread.modelSelection.instanceId);
+      : resolveCommandPaletteVoiceProvider({
+          providers: providersByEnvironment.get(voiceThread.environmentId) ?? [],
+          settings: voiceSettings,
+          project:
+            projects.find(
+              (project) =>
+                project.environmentId === voiceThread?.environmentId &&
+                project.id === voiceThread.projectId,
+            ) ?? null,
+          thread: activeThread,
+          draftProviderId: draftVoiceProviderId,
+          supportsProviderSwitchingViaHandoff: threadSupportsProviderHandoff(
+            voiceThreadProjection?.projection,
+          ),
+          now: Date.parse(`${nowMinute}:00Z`),
+        });
   const voiceAvailability = resolveVoiceAvailability({
     provider: voiceProvider?.driver,
-    hasSession: activeThread?.activeProviderThreadId != null,
+    hasThread: voiceThread !== null,
     permitted: canStartVoice,
     unavailableReason:
-      activeThread !== null &&
-      environments.find((environment) => environment.environmentId === activeThread.environmentId)
+      voiceThread !== null &&
+      environments.find((environment) => environment.environmentId === voiceThread.environmentId)
         ?.connection.phase !== "connected"
         ? "Reconnect to the environment before starting voice."
-        : null,
+        : activeThread?.activeProviderThreadId != null &&
+            voiceProvider?.instanceId !== activeThread.modelSelection.instanceId
+          ? "Send a message with the selected provider to switch this thread before starting voice."
+          : null,
     thread: activeThread,
     ...voiceBrowserSupport(),
   });
@@ -1388,7 +1440,7 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "voice.toggleMute",
       run: async () => voiceMode.toggleMute(),
     });
-  } else if (activeThread !== null && voiceAvailability.kind !== "unsupported") {
+  } else if (voiceThread !== null && voiceAvailability.kind !== "unsupported") {
     const thread = activeThread;
     actionItems.push({
       kind: "action",
@@ -1399,10 +1451,11 @@ function OpenCommandPaletteDialog(props: {
       disabled: voiceAvailability.kind !== "ready",
       shortcutCommand: "voice.toggle",
       run: async () => {
-        toggleThreadVoice(
-          { environmentId: thread.environmentId, threadId: thread.id },
-          voiceAvailability,
-        );
+        if (!startComposerVoice() && thread !== null)
+          toggleThreadVoice(
+            { environmentId: thread.environmentId, threadId: thread.id },
+            voiceAvailability,
+          );
       },
     });
   }

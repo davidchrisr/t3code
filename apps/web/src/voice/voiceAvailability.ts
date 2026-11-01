@@ -8,7 +8,7 @@ export type VoiceAvailability =
 
 export function resolveVoiceAvailability(input: {
   readonly provider: ProviderDriverKind | undefined;
-  readonly hasSession: boolean;
+  readonly hasThread: boolean;
   readonly permitted: boolean;
   readonly browserSupported: boolean;
   readonly microphoneAvailable: boolean;
@@ -27,7 +27,7 @@ export function resolveVoiceAvailability(input: {
     (!input.permitted ? "You do not have permission to start voice." : null) ??
     (!input.browserSupported ? "This browser does not support voice conversations." : null) ??
     (!input.microphoneAvailable ? "Microphone access requires HTTPS or localhost." : null) ??
-    (!input.hasSession ? "Send a message before starting voice." : null);
+    (!input.hasThread ? "Select a thread before starting voice." : null);
   return reason === null ? { kind: "ready" } : { kind: "unavailable", reason };
 }
 

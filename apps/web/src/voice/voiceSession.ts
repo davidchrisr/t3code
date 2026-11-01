@@ -111,7 +111,10 @@ export class VoiceSession {
     this.stop();
     this.update({ error: message });
   }
-  readonly start = async (target: VoiceTarget) => {
+  readonly start = async (
+    target: VoiceTarget,
+    prepare?: (signal: AbortSignal) => Promise<void>,
+  ) => {
     this.stop();
     const owner: Owner = {
       abort: new AbortController(),
@@ -126,6 +129,10 @@ export class VoiceSession {
       error: null,
     });
     try {
+      if (prepare) {
+        await prepare(owner.abort.signal);
+        if (this.owner !== owner) return;
+      }
       const meter = this.platform.metering((levels) => {
         if (this.owner === owner) this.publishLevels(levels);
       });

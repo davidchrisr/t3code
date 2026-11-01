@@ -87,7 +87,7 @@ export class ProviderVoiceSessionError extends Schema.TaggedError<ProviderVoiceS
   override get message(): string {
     switch (this.reason) {
       case "unavailable":
-        return "Send a message in a Codex thread before starting voice.";
+        return "Voice is unavailable for the current thread. Check its provider and settings, then try again.";
       case "unsupported":
         return "This provider does not support voice conversations.";
       case "busy":

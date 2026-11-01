@@ -59,12 +59,169 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 const layerTestDatabase = SqlitePersistence.layerMemory;
 
 it.effect.each([
+  "new",
+  "restored",
+  "released",
+  "changed-during-create",
+  "workspace-during-open",
+  "project-during-open",
+] as const)("starts voice without a text turn in a %s session", (scenario) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const started = yield* Deferred.make<void>();
+      const creating = yield* Deferred.make<void>();
+      const finishCreate = yield* Deferred.make<void>();
+      const opening = yield* Deferred.make<void>();
+      const finishOpen = yield* Deferred.make<void>();
+      const changedDuringOpen = scenario.endsWith("during-open");
+      const fresh = scenario === "new" || scenario === "changed-during-create";
+      const threadId = ThreadId.make("voice-startup");
+      const voice = Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+        Stream.flatMap(() => Stream.never),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const now = yield* DateTime.now;
+        const providerSessionId = ids.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        const created = yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now });
+        yield* sink.write({
+          events: [
+            { ...created, payload: { ...created.payload, activeProviderThreadId: null } },
+            ...(fresh
+              ? []
+              : [
+                  {
+                    id: yield* ids.allocate.event({ threadId }),
+                    type: "provider-thread.updated" as const,
+                    threadId,
+                    occurredAt: now,
+                    payload: makeProviderThread({
+                      idAllocator: ids,
+                      threadId,
+                      providerSessionId,
+                      now,
+                    }),
+                  },
+                ]),
+          ],
+        });
+        if (scenario === "released") {
+          yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+          yield* manager.release({ providerSessionId, reason: "idle_timeout" });
+        }
+        const fiber = yield* manager
+          .startVoiceSession({ threadId, offerSdp: "offer" })
+          .pipe(Stream.runDrain, Effect.forkScoped);
+        if (changedDuringOpen) {
+          yield* Deferred.await(opening);
+          const projections = yield* ProjectionStore.ProjectionStoreV2;
+          const current = yield* projections.getThread(threadId);
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "thread.metadata-updated",
+                threadId,
+                occurredAt: now,
+                payload: {
+                  ...current,
+                  ...(scenario === "workspace-during-open"
+                    ? { worktreePath: "/changed-worktree" }
+                    : { projectId: ProjectId.make("changed-project") }),
+                },
+              },
+            ],
+          });
+          yield* Deferred.succeed(finishOpen, undefined);
+          const outcome = yield* Effect.raceFirst(
+            Fiber.await(fiber).pipe(Effect.as("stopped")),
+            Deferred.await(started).pipe(Effect.as("started")),
+          );
+          assert.equal(outcome, "stopped");
+          assert.isFalse(yield* Deferred.isDone(started));
+          assert.equal((yield* Ref.get(state)).resumeCount, 0);
+          return;
+        }
+        if (scenario === "changed-during-create") {
+          yield* Deferred.await(creating);
+          const current = yield* (yield* ProjectionStore.ProjectionStoreV2).getThread(threadId);
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "thread.runtime-mode-updated",
+                threadId,
+                occurredAt: yield* DateTime.now,
+                payload: { ...current, runtimeMode: "approval-required" },
+              },
+            ],
+          });
+          yield* Deferred.succeed(finishCreate, undefined);
+          assert.isTrue(Exit.isFailure(yield* Fiber.await(fiber)));
+          assert.isFalse(yield* Deferred.isDone(started));
+          const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+            threadId,
+          );
+          assert.isNull(projection.thread.activeProviderThreadId);
+          assert.lengthOf(projection.providerThreads, 0);
+          return;
+        }
+        yield* Effect.raceFirst(
+          Deferred.await(started),
+          Fiber.join(fiber).pipe(Effect.andThen(Effect.die("Voice ended before startup"))),
+        );
+        const projection = yield* (yield* ProjectionStore.ProjectionStoreV2).getThreadProjection(
+          threadId,
+        );
+        assert.lengthOf(projection.runs, 0);
+        assert.lengthOf(projection.messages, 0);
+        assert.lengthOf(projection.providerThreads, 1);
+        assert.equal(projection.thread.activeProviderThreadId, projection.providerThreads[0]?.id);
+        assert.equal(projection.providerThreads[0]?.nativeThreadRef?.nativeId, "native-thread");
+        assert.equal((yield* Ref.get(state)).openCount, scenario === "released" ? 2 : 1);
+        yield* Fiber.interrupt(fiber);
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            voice,
+            ensureThreadId: threadId,
+            beforeOpen: () =>
+              changedDuringOpen
+                ? Deferred.succeed(opening, undefined).pipe(
+                    Effect.andThen(Deferred.await(finishOpen)),
+                  )
+                : Effect.void,
+            beforeEnsure:
+              scenario === "changed-during-create"
+                ? Deferred.succeed(creating, undefined).pipe(
+                    Effect.andThen(Deferred.await(finishCreate)),
+                  )
+                : Effect.void,
+          }),
+        ),
+      );
+    }),
+  ),
+);
+
+it.effect.each([
   "detach",
   "release",
   "provider-loss",
   "pending-detach",
   "pending-release",
   "pending-settings",
+  "workspace",
+  "project",
+  "pending-workspace",
+  "pending-project",
 ] as const)("ends voice on %s without a realtime closed event", (scenario) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -117,17 +274,31 @@ it.effect.each([
         if (scenario.endsWith("detach")) yield* manager.detach({ providerSessionId, threadId });
         else if (scenario.endsWith("release"))
           yield* manager.release({ providerSessionId, reason: "runtime_error" });
-        else if (scenario === "pending-settings") {
+        else if (
+          scenario === "pending-settings" ||
+          scenario.endsWith("workspace") ||
+          scenario.endsWith("project")
+        ) {
           const projections = yield* ProjectionStore.ProjectionStoreV2;
           const thread = yield* projections.getThread(threadId);
           yield* sink.write({
             events: [
               {
                 id: yield* ids.allocate.event({ threadId }),
-                type: "thread.runtime-mode-updated",
+                type:
+                  scenario === "pending-settings"
+                    ? "thread.runtime-mode-updated"
+                    : "thread.metadata-updated",
                 threadId,
                 occurredAt: now,
-                payload: { ...thread, runtimeMode: "approval-required" },
+                payload: {
+                  ...thread,
+                  ...(scenario === "pending-settings"
+                    ? { runtimeMode: "approval-required" as const }
+                    : scenario.endsWith("workspace")
+                      ? { worktreePath: "/changed-worktree" }
+                      : { projectId: ProjectId.make("changed-project") }),
+                },
               },
             ],
           });
@@ -424,6 +595,8 @@ function unimplemented(detail: string) {
 const makeProviderAdapter = Effect.fnUntraced(function* (
   state: Ref.Ref<TestProviderRuntimeState>,
   options: {
+    readonly ensureThreadId?: ThreadId;
+    readonly beforeEnsure?: Effect.Effect<void>;
     readonly beforeResume?: Effect.Effect<void>;
     readonly voice?: Stream.Stream<
       ProviderVoiceSessionEvent,
@@ -450,6 +623,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
   } = {},
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const countClose = Effect.addFinalizer(() =>
     Ref.update(state, (current) => ({
       ...current,
@@ -532,7 +706,18 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
             : {
                 hasPendingBackgroundWorkForThread: () => options.hasPendingBackgroundWorkForThread!,
               }),
-          ensureThread: () => unimplemented("ensureThread unused in test"),
+          ensureThread: () =>
+            options.ensureThreadId === undefined
+              ? unimplemented("ensureThread unused in test")
+              : Effect.gen(function* () {
+                  yield* options.beforeEnsure ?? Effect.void;
+                  return makeProviderThread({
+                    idAllocator,
+                    threadId: options.ensureThreadId!,
+                    providerSessionId: input.providerSessionId,
+                    now: yield* DateTime.now,
+                  });
+                }),
           resumeThread: (threadInput) =>
             (options.beforeResume ?? Effect.void).pipe(
               Effect.andThen(
@@ -572,6 +757,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
 });
 
 function layerTest(input: {
+  readonly ensureThreadId?: ThreadId;
+  readonly beforeEnsure?: Effect.Effect<void>;
   readonly beforeResume?: Effect.Effect<void>;
   readonly voice?: Stream.Stream<ProviderVoiceSessionEvent, ProviderAdapter.ProviderAdapterV2Error>;
   readonly state: Ref.Ref<TestProviderRuntimeState>;
@@ -618,6 +805,8 @@ function layerTest(input: {
             : layerTestEventSink;
   const layerRegistry = Layer.unwrap(
     makeProviderAdapter(input.state, {
+      ...(input.ensureThreadId === undefined ? {} : { ensureThreadId: input.ensureThreadId }),
+      ...(input.beforeEnsure === undefined ? {} : { beforeEnsure: input.beforeEnsure }),
       ...(input.beforeResume === undefined ? {} : { beforeResume: input.beforeResume }),
       ...(input.voice === undefined ? {} : { voice: input.voice }),
       failEventStream: input.failEventStream ?? false,
@@ -643,7 +832,7 @@ function layerTest(input: {
       ...(input.scopeCloseReached === undefined
         ? {}
         : { scopeCloseReached: input.scopeCloseReached }),
-    }).pipe(Effect.map(ProviderAdapterRegistry.layerSingle)),
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.map(ProviderAdapterRegistry.layerSingle)),
   );
   const layerConfiguredMcpRegistry =
     input.pauseResolve === undefined

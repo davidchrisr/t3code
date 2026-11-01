@@ -368,6 +368,14 @@ export interface ChatComposerProps {
     React.SetStateAction<ReadonlyArray<ModelSelection> | null>
   >;
 
+  onPrepareVoiceThread: (
+    input: {
+      modelSelection: ModelSelection;
+      runtimeMode: RuntimeMode;
+      interactionMode: ProviderInteractionMode;
+    },
+    signal: AbortSignal,
+  ) => Promise<void>;
   activeThreadId: ThreadId | null;
   activeThread: Thread | undefined;
   activeThreadShell: ThreadShell | null;
@@ -932,38 +940,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
-  const voiceThread = activeThread ?? props.activeThreadShell;
-  const voiceProvider = providerStatuses.find(
-    (provider) =>
-      provider.instanceId === (voiceThread?.modelSelection.instanceId ?? selectedInstanceId),
-  );
-  const {
-    active: voiceActive,
-    availability: voiceAvailability,
-    toggleVoice,
-  } = useVoiceControls({
-    environmentId,
-    threadId: activeThreadId,
-    provider: voiceProvider?.driver,
-    hasSession: voiceThread?.activeProviderThreadId != null,
-    thread: voiceThread,
-    canOperateThread,
-    unavailableReason:
-      environmentUnavailable === null
-        ? null
-        : "Reconnect to the environment before starting voice.",
-    keybindings,
-  });
-  const voiceButton =
-    voiceActive || voiceAvailability.kind !== "unsupported" ? (
-      <ComposerVoiceButton
-        active={voiceActive}
-        disabledReason={
-          !voiceActive && voiceAvailability.kind === "unavailable" ? voiceAvailability.reason : null
-        }
-        onToggle={toggleVoice}
-      />
-    ) : null;
   const selectedProviderSkills = selectedProviderStatus
     ? resolveProviderSkillsForCwd(selectedProviderStatus, gitCwd)
     : NO_PROVIDER_SKILLS;
@@ -988,6 +964,49 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedModel,
     selectedModelOptionsForDispatch,
   );
+  const voiceThread = activeThread ?? props.activeThreadShell;
+  const voiceProvider = providerStatuses.find(
+    (provider) => provider.instanceId === selectedInstanceId,
+  );
+  const {
+    active: voiceActive,
+    availability: voiceAvailability,
+    toggleVoice,
+  } = useVoiceControls({
+    environmentId,
+    threadId: activeThreadId,
+    provider: voiceProvider?.driver,
+    prepareThread: (signal) =>
+      props.onPrepareVoiceThread(
+        {
+          modelSelection: selectedModelSelection,
+          runtimeMode: compatibleRuntimeMode,
+          interactionMode,
+        },
+        signal,
+      ),
+    thread: voiceThread,
+    canOperateThread,
+    unavailableReason: projectSelectionRequired
+      ? "Choose a project before starting voice."
+      : voiceThread?.activeProviderThreadId != null &&
+          voiceThread.modelSelection.instanceId !== selectedInstanceId
+        ? "Send a message with the selected provider to switch this thread before starting voice."
+        : environmentUnavailable === null
+          ? null
+          : "Reconnect to the environment before starting voice.",
+    keybindings,
+  });
+  const voiceButton =
+    voiceActive || voiceAvailability.kind !== "unsupported" ? (
+      <ComposerVoiceButton
+        active={voiceActive}
+        disabledReason={
+          !voiceActive && voiceAvailability.kind === "unavailable" ? voiceAvailability.reason : null
+        }
+        onToggle={toggleVoice}
+      />
+    ) : null;
   const selectedModelForPicker = selectedModel;
   const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
   for (const entry of providerInstanceEntries) {

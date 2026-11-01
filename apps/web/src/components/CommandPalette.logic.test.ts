@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ProviderDriverKind,
+  ThreadId,
+  DEFAULT_SERVER_SETTINGS,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -14,7 +22,78 @@ import {
   createCommandPaletteSearchState,
   reduceCommandPaletteSearchState,
   type CommandPaletteUiState,
+  resolveCommandPaletteVoiceProvider,
 } from "./CommandPalette.logic";
+
+function makeVoiceProviders() {
+  return ["codex", "claudeAgent"].map((driver): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(driver),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    status: "ready",
+    auth: { status: "authenticated" },
+    version: null,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+  }));
+}
+
+it.each(["available-default", "configured-default", "explicit-other-provider"] as const)(
+  "resolves palette voice provider for a draft using %s",
+  (scenario) => {
+    const providers = makeVoiceProviders();
+    const expected = scenario === "available-default" ? "codex" : "claudeAgent";
+    const provider = resolveCommandPaletteVoiceProvider({
+      providers,
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        ...(scenario === "configured-default"
+          ? {
+              defaultModelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: "default",
+              },
+            }
+          : {}),
+      },
+      project: { id: ProjectId.make("project"), defaultModelSelection: null },
+      thread: null,
+      supportsProviderSwitchingViaHandoff: false,
+      draftProviderId:
+        scenario === "explicit-other-provider" ? ProviderInstanceId.make("claudeAgent") : null,
+      now: 0,
+    });
+    expect(provider?.instanceId).toBe(expected);
+  },
+);
+
+it.each([
+  { saved: "codex", selected: "claudeAgent", handoff: true },
+  { saved: "claudeAgent", selected: "codex", handoff: true },
+  { saved: "codex", selected: "claudeAgent", handoff: false },
+  { saved: "claudeAgent", selected: "codex", handoff: false },
+])(
+  "resolves palette voice provider for a started $saved thread selecting $selected with handoff=$handoff",
+  ({ saved, selected, handoff }) => {
+    const provider = resolveCommandPaletteVoiceProvider({
+      providers: makeVoiceProviders(),
+      settings: DEFAULT_SERVER_SETTINGS,
+      project: null,
+      thread: makeThreadFixture({
+        modelSelection: { instanceId: ProviderInstanceId.make(saved), model: "default" },
+        latestUserMessageAt: "2026-01-01T00:00:00.000Z",
+        itemCount: 1,
+      }),
+      draftProviderId: ProviderInstanceId.make(selected),
+      supportsProviderSwitchingViaHandoff: handoff,
+      now: 0,
+    });
+    expect(provider?.instanceId).toBe(handoff ? selected : saved);
+  },
+);
 
 describe("linked pull request thread navigation", () => {
   it("keeps archived relations searchable and routes them through the PR environment", async () => {

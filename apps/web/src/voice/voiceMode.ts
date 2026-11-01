@@ -63,6 +63,7 @@ export function useVoicePhaseFor(environmentId: EnvironmentId, threadId: ThreadI
 export function toggleThreadVoice(
   target: VoiceTarget | null,
   availability: VoiceAvailability,
+  prepare?: (signal: AbortSignal) => Promise<void>,
 ): boolean {
   const state = voiceMode.getState();
   if (state.phase !== "idle" && isVoiceTargetFor(state, target)) {
@@ -79,7 +80,7 @@ export function toggleThreadVoice(
     });
     return false;
   }
-  void voiceMode.start(target);
+  void voiceMode.start(target, prepare);
   return true;
 }
 

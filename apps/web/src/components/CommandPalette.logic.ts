@@ -26,6 +26,9 @@ import {
   type KeybindingCommand,
   type SourceControlDiscoveryResult,
   type SourceControlRepositoryInfo,
+  type ProviderInstanceId,
+  type ServerProvider,
+  type ServerSettings,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
@@ -33,10 +36,65 @@ import { type ReactNode } from "react";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 import { isSidebarHiddenThread } from "./Sidebar.logic";
+import { deriveLockedProvider, resolveComposerProviderSelection } from "./ChatView.logic";
+import {
+  providerInstanceEntriesFor,
+  resolveProjectDefaultProviderModelSelection,
+} from "../providerInstances";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
+
+export function resolveCommandPaletteVoiceProvider(input: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly settings: ServerSettings;
+  readonly project: Pick<Project, "id" | "defaultModelSelection"> | null;
+  readonly thread: Thread | null;
+  readonly draftProviderId: ProviderInstanceId | null;
+  readonly supportsProviderSwitchingViaHandoff: boolean;
+  readonly now: number;
+}) {
+  const { providers, settings, project, thread, draftProviderId } = input;
+  const projectId = project?.id ?? thread?.projectId ?? null;
+  const configuredDefault = resolveProjectSettings(settings, projectId, project).settings
+    .defaultModelSelection;
+  const draftDefault =
+    thread === null
+      ? resolveNewThreadModelSelection({
+          defaultSelection:
+            configuredDefault ??
+            resolveProjectDefaultProviderModelSelection(providers, settings, projectId),
+          fallbackSelection: settings.fallbackModelSelection,
+          providers,
+          settings,
+          projectId,
+          now: input.now,
+        })
+      : null;
+  const projectSelection = draftDefault?.fallback ? draftDefault.selection : configuredDefault;
+  const threadProvider = thread?.modelSelection.instanceId ?? projectSelection?.instanceId ?? null;
+  return resolveComposerProviderSelection({
+    entries: providerInstanceEntriesFor(providers, settings, projectId),
+    candidateInstanceIds: [
+      draftProviderId,
+      thread?.runtime?.providerInstanceId,
+      thread?.modelSelection.instanceId,
+      projectSelection?.instanceId,
+    ],
+    lockedProvider: input.supportsProviderSwitchingViaHandoff
+      ? null
+      : deriveLockedProvider({
+          thread,
+          selectedProvider: draftProviderId,
+          threadProvider,
+          providers,
+        }),
+    lockedInstanceId: thread?.runtime?.providerInstanceId ?? thread?.modelSelection.instanceId,
+  }).selectedProviderEntry?.snapshot;
+}
 
 export function buildLinkedThreadActionItems(
   input: CommandPaletteLinkedThreads & {

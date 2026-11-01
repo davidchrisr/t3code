@@ -1,3 +1,4 @@
+import { prepareVoiceThread } from "../voice/prepareVoiceThread";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
@@ -2984,6 +2985,36 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onWorktreeSetupWorkLocallyStable = useStableCallback(onWorktreeSetupWorkLocally);
+  const onPrepareVoiceThread = useStableCallback(
+    async (
+      selection: {
+        modelSelection: ModelSelection;
+        runtimeMode: RuntimeMode;
+        interactionMode: ProviderInteractionMode;
+      },
+      signal: AbortSignal,
+    ) => {
+      if (!activeThread || !activeProject)
+        throw new Error("Choose a project before starting voice.");
+      const routeKey = currentRouteThreadKeyRef.current;
+      await prepareVoiceThread({
+        thread: activeThread,
+        selection,
+        isLocalDraftThread,
+        needsWorktree:
+          activeMessageCount === 0 &&
+          sendEnvMode === "worktree" &&
+          activeThread.worktreePath === null,
+        branch: activeThreadBranch,
+        startFromOrigin,
+        signal,
+        isCurrentThread: () => currentRouteThreadKeyRef.current === routeKey,
+        navigate: (ref) =>
+          navigate({ to: "/$environmentId/$threadId", params: buildThreadRouteParams(ref) }),
+        beginWorktreeSetup,
+      });
+    },
+  );
   const onComposerSendStable = useStableCallback(onSend);
   const sendPreviewAnnotation = (
     annotation: PreviewAnnotationPayload,
@@ -3593,6 +3624,7 @@ export default function ChatView(props: ChatViewProps) {
                               routeKind={routeKind}
                               routeThreadRef={routeThreadRef}
                               draftId={draftId}
+                              onPrepareVoiceThread={onPrepareVoiceThread}
                               activeThreadId={activeThreadId}
                               activeThread={activeThread}
                               activeThreadShell={activeThreadShell}

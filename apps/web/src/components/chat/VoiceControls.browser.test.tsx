@@ -35,7 +35,6 @@ function Composer({ id }: { id: string }) {
     environmentId: EnvironmentId.make("environment"),
     threadId: ThreadId.make(id),
     provider: ProviderDriverKind.make("codex"),
-    hasSession: true,
     canOperateThread: true,
     unavailableReason: null,
     thread: null,

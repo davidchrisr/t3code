@@ -1023,7 +1023,7 @@ const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema
 const matchesNothing = (...filters: ReadonlyArray<ReadonlyArray<unknown> | undefined>) =>
   filters.some((values) => values?.length === 0);
 
-const encodeThreadPayload = Schema.encodeEffect(
+export const encodeThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
 );
 const encodeThreadUpdatedAt = Schema.encodeEffect(
