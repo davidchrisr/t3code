@@ -1,6 +1,7 @@
 import type {
   createPreviewStreamClient,
   createPreviewFramePainter,
+  PreviewStreamControl,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -86,15 +87,104 @@ describe("view-only server browser", () => {
   });
 });
 
-async function renderSurface() {
+async function renderSurface(controller: PreviewStreamControl["controller"] = "you") {
   setup();
   await using stack = new AsyncDisposableStack();
   const screen = stack.use(await render(<Harness interactive />));
   const canvas = screen.container.querySelector("canvas");
   if (!canvas) throw new Error("The surface did not render its canvas.");
   await vi.waitFor(() => expect(mocks.connect).toHaveBeenCalled());
-  return Object.assign(stack.move(), { canvas });
+  await act(() =>
+    mocks.connect.mock.lastCall![1].onControl?.({
+      canOperate: true,
+      controller,
+      generation: 1,
+      dialog: null,
+    }),
+  );
+  mocks.send.mockClear();
+  const input = screen.container.querySelector("textarea")!;
+  return Object.assign(stack.move(), { canvas, input });
 }
+
+const keys = () =>
+  mocks.send.mock.calls.map(([input]) => input).filter((input) => input.type === "key");
+
+describe("ServerBrowserSurface clipboard commands", () => {
+  it("sends a native Copy or Cut menu command to the page once", async () => {
+    await using surface = await renderSurface("you");
+    const { input, canvas } = surface;
+    // Chromium runs a script Copy or Cut only during a user gesture, as a menu click is.
+    await userEvent.click(canvas);
+    input.focus();
+    mocks.send.mockClear();
+
+    // Like Electron's webContents.copy(): the browser's Copy command, with no key.
+    expect(document.execCommand("copy")).toBe(true);
+    expect(keys()).toEqual([
+      { type: "key", action: "down", key: "c", code: "KeyC", keyCode: 67, modifiers: 2 },
+      { type: "key", action: "up", key: "c", code: "KeyC", keyCode: 67, modifiers: 2 },
+    ]);
+
+    mocks.send.mockClear();
+    expect(document.execCommand("cut")).toBe(true);
+    expect(input.value).toBe("\u200b");
+    expect(keys()).toEqual([
+      { type: "key", action: "down", key: "x", code: "KeyX", keyCode: 88, modifiers: 2 },
+      { type: "key", action: "up", key: "x", code: "KeyX", keyCode: 88, modifiers: 2 },
+    ]);
+  });
+
+  it("sends a keyboard Copy or Cut once and leaves menu Copy working after any shortcut", async () => {
+    await using surface = await renderSurface("you");
+    const { input, canvas } = surface;
+    await userEvent.click(canvas);
+    input.focus();
+    const prevented: boolean[] = [];
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (/^[cx]$/i.test(event.key)) prevented.push(event.defaultPrevented);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    using _listener = { [Symbol.dispose]: () => window.removeEventListener("keydown", onKeyDown) };
+
+    // An unprevented copy or cut key also makes the browser fire copy or cut: here Chromium's
+    // Ctrl key binding, on macOS Electron's menu after the Meta keyup.
+    for (const [shortcut, cancels] of [
+      ["{Control>}x{/Control}", true],
+      ["{Control>}c{/Control}", true],
+      ["{Meta>}{x>}{/Meta}{/x}", true],
+      ["{Control>}{Shift>}c{/Shift}{/Control}", false],
+      ["{Control>}{Alt>}x{/Alt}{/Control}", false],
+    ] as const) {
+      mocks.send.mockClear();
+      prevented.length = 0;
+      await userEvent.keyboard(shortcut);
+      expect(prevented, shortcut).toEqual([cancels]);
+      expect(keys().filter((key) => /^[cx]$/i.test(key.key)).length, shortcut).toBe(2);
+      expect(input.value).toBe("\u200b");
+
+      mocks.send.mockClear();
+      expect(document.execCommand("copy")).toBe(true);
+      expect(keys(), shortcut).toEqual([
+        { type: "key", action: "down", key: "c", code: "KeyC", keyCode: 67, modifiers: 2 },
+        { type: "key", action: "up", key: "c", code: "KeyC", keyCode: 67, modifiers: 2 },
+      ]);
+    }
+  });
+
+  it("sends nothing when another viewer controls the page", async () => {
+    await using surface = await renderSurface("another-viewer");
+    const { input } = surface;
+
+    expect(
+      input.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true })),
+    ).toBe(false);
+    expect(
+      input.dispatchEvent(new ClipboardEvent("cut", { bubbles: true, cancelable: true })),
+    ).toBe(false);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+});
 
 const mouseUp = (canvas: HTMLCanvasElement, button: number) => {
   const event = new MouseEvent("mouseup", { button, bubbles: true, cancelable: true });

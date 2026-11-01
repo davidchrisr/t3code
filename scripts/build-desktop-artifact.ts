@@ -2815,6 +2815,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
+    afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: platform === "mac" ? MACOS_FORK_IDENTITY.appId : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version, platform),
     artifactName:
