@@ -1,6 +1,10 @@
 import { isMacPlatform } from "../../lib/utils";
 import { SELECTION_MULTI_CLICK_INTERVAL_MS } from "../../lib/selectionActions";
-import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../terminal-links";
+import {
+  collectWrappedTerminalLinkLine,
+  extractTerminalLinks,
+  isTerminalLinkActivation,
+} from "../../terminal-links";
 import {
   GHOSTTY_CELL_WIDE,
   GhosttyTerminalCore,
@@ -1398,7 +1402,7 @@ export class GhosttyTerminalSurface {
     if (event.button !== 0) return;
     const clickCount = this.recordSelectionClick(event);
     const link = this.linkAt(event.clientX, event.clientY);
-    if (link && !event.shiftKey && clickCount === 1) {
+    if (link && isTerminalLinkActivation(event) && !event.shiftKey && clickCount === 1) {
       event.preventDefault();
       event.stopPropagation();
       this.linkActivationPointerId = event.pointerId;
@@ -1616,6 +1620,9 @@ export class GhosttyTerminalSurface {
     this.canvas.style.cursor = link ? "pointer" : "";
     if (unchanged) return;
     this.hoveredLink = link;
+    this.canvas.title = link
+      ? `${link.text}\n${isMacPlatform(navigator.platform) ? "Cmd" : "Ctrl"}+click to open`
+      : "";
     this.forceFullRender = true;
     this.requestRender();
   }
@@ -1635,9 +1642,7 @@ export class GhosttyTerminalSurface {
         this.sendMouse("press", ghosttyMouseButton(0), event);
         this.sendMouse("release", ghosttyMouseButton(0), event);
       } else {
-        const link = this.linkAt(event.clientX, event.clientY);
-        if (link) this.options.onLinkActivate(link.text, event);
-        else this.clearSelection();
+        this.clearSelection();
       }
       return;
     }
@@ -1652,7 +1657,7 @@ export class GhosttyTerminalSurface {
       if (this.canvas.hasPointerCapture(event.pointerId)) {
         this.canvas.releasePointerCapture(event.pointerId);
       }
-      if (event.type !== "pointercancel") {
+      if (event.type !== "pointercancel" && isTerminalLinkActivation(event)) {
         if (link && isSameTerminalLink(link, this.linkAt(event.clientX, event.clientY))) {
           this.options.onLinkActivate(link.text, event);
         }
