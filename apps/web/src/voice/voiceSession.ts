@@ -1,4 +1,5 @@
 import type { EnvironmentId, ProviderVoiceSessionEvent, ThreadId } from "@t3tools/contracts";
+import type { VoiceLevels, VoiceMetering } from "./voiceMetering";
 
 export interface VoiceTarget {
   readonly environmentId: EnvironmentId;
@@ -16,6 +17,7 @@ interface VoicePlatform {
   readonly microphone: () => Promise<MediaStream>;
   readonly peer: () => RTCPeerConnection;
   readonly audio: () => HTMLAudioElement;
+  readonly metering: (publish: (levels: VoiceLevels) => void) => VoiceMetering;
   readonly open: (
     target: VoiceTarget,
     offerSdp: string,
@@ -29,6 +31,7 @@ interface Owner {
   mic?: MediaStream;
   peer?: RTCPeerConnection;
   audio?: HTMLAudioElement;
+  meter?: VoiceMetering;
 }
 
 export class VoiceSession {
@@ -42,6 +45,9 @@ export class VoiceSession {
   };
   private owner: Owner | undefined;
   private readonly listeners = new Set<() => void>();
+  private readonly levelListeners = new Set<(levels: VoiceLevels) => void>();
+  private levels: VoiceLevels = { microphone: 0, speaker: 0 };
+  private meteringVisible = true;
   constructor(private readonly platform: VoicePlatform) {}
   readonly getState = () => this.state;
   readonly subscribe = (listener: () => void) => {
@@ -50,6 +56,27 @@ export class VoiceSession {
       this.listeners.delete(listener);
     };
   };
+  readonly subscribeLevels = (listener: (levels: VoiceLevels) => void) => {
+    this.levelListeners.add(listener);
+    listener(this.levels);
+    return () => {
+      this.levelListeners.delete(listener);
+    };
+  };
+  private publishLevels(levels: VoiceLevels) {
+    this.levels = levels;
+    for (const listener of this.levelListeners) listener(levels);
+  }
+  readonly setMeteringVisible = (visible: boolean) => {
+    this.meteringVisible = visible;
+    const owner = this.owner;
+    if (visible && this.state.phase === "active" && owner)
+      void owner.meter
+        ?.start()
+        .catch(() => this.fail(owner, "Could not resume the voice audio meter."));
+    else owner?.meter?.pause();
+  };
+  readonly dismissError = () => this.update({ error: null });
   private update(patch: Partial<VoiceState>) {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
@@ -65,11 +92,18 @@ export class VoiceSession {
       owner.audio.srcObject = null;
     }
     this.update({ phase: "idle", muted: false });
+    this.publishLevels({ microphone: 0, speaker: 0 });
+    const stoppedState = this.state;
+    void owner?.meter?.stop().catch(() => {
+      if (this.state === stoppedState)
+        this.update({ error: "Could not release the voice audio meter." });
+    });
   };
   readonly toggleMute = () => {
     if (!this.owner) return;
     const muted = !this.state.muted;
     for (const track of this.owner.mic?.getAudioTracks() ?? []) track.enabled = !muted;
+    this.owner.meter?.setMuted(muted);
     this.update({ muted });
   };
   private fail(owner: Owner, message: string) {
@@ -92,6 +126,15 @@ export class VoiceSession {
       error: null,
     });
     try {
+      const meter = this.platform.metering((levels) => {
+        if (this.owner === owner) this.publishLevels(levels);
+      });
+      owner.meter = meter;
+      const meterReady = meter.ready.then(
+        () => null,
+        (cause: unknown) =>
+          cause instanceof Error ? cause : new Error("Could not start the voice audio meter."),
+      );
       const mic = await this.platform.microphone();
       if (this.owner !== owner) {
         for (const track of mic.getTracks()) track.stop();
@@ -99,6 +142,11 @@ export class VoiceSession {
       }
       owner.mic = mic;
       for (const track of mic.getAudioTracks()) track.enabled = !this.state.muted;
+      meter.setMicrophone(mic);
+      meter.setMuted(this.state.muted);
+      const meterError = await meterReady;
+      if (this.owner !== owner) return;
+      if (meterError) throw meterError;
       const peer = this.platform.peer();
       owner.peer = peer;
       const audio = this.platform.audio();
@@ -106,7 +154,14 @@ export class VoiceSession {
       audio.autoplay = true;
       peer.ontrack = (event) => {
         if (this.owner !== owner) return;
-        audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+        const stream = event.streams[0] ?? new MediaStream([event.track]);
+        try {
+          meter.setSpeaker(stream);
+        } catch {
+          this.fail(owner, "Could not connect the speaker audio meter.");
+          return;
+        }
+        audio.srcObject = stream;
         void audio
           .play()
           .catch(() =>
@@ -115,7 +170,13 @@ export class VoiceSession {
       };
       peer.onconnectionstatechange = () => {
         if (this.owner !== owner) return;
-        if (peer.connectionState === "connected") this.update({ phase: "active" });
+        if (peer.connectionState === "connected") {
+          this.update({ phase: "active" });
+          if (this.meteringVisible)
+            void meter
+              .start()
+              .catch(() => this.fail(owner, "Could not start the voice audio meter."));
+        }
         if (["failed", "disconnected", "closed"].includes(peer.connectionState))
           this.fail(owner, "The voice connection ended. Start voice again to reconnect.");
       };

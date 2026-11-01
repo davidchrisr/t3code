@@ -585,7 +585,7 @@ describe("parseSideChatCommand", () => {
     expect(parseSideChatCommand("/sidebar")).toBeNull();
     expect(parseSideChatCommand("/btwx")).toBeNull();
     expect(parseSideChatCommand("ask /side later")).toBeNull();
-    const items = (["side", "btw", "plan"] as const).map((command) => ({
+    const items = (["side", "btw", "voice", "plan"] as const).map((command) => ({
       id: `slash:${command}`,
       type: "slash-command" as const,
       command,

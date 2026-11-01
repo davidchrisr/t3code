@@ -15,6 +15,7 @@ import {
   makeThreadErrorSetter,
 } from "../ChatView.logic";
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
+import { isVoiceCommand } from "../../voice/voiceAvailability";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
@@ -415,6 +416,27 @@ export function useComposerSend(input: ComposerSendInput) {
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
     const promptAtSend = promptRef.current;
+    if (
+      !directAnnotation &&
+      !queuedRunEdit.isEditing &&
+      !activePendingProgress &&
+      isVoiceCommand(promptAtSend)
+    ) {
+      if (draftHasNonPromptContent(composerDraftTarget)) {
+        toastManager.add({
+          type: "info",
+          title:
+            "Remove attachments before running /voice, or use the voice button to keep this draft.",
+        });
+        return;
+      }
+      if (composerRef.current?.toggleVoice()) {
+        promptRef.current = "";
+        setComposerDraftPrompt(composerDraftTarget, "");
+        composerRef.current?.resetCursorState();
+      }
+      return;
+    }
     if (
       usageLimitsOffered &&
       usageLimitsKey !== null &&
