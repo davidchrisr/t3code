@@ -70,8 +70,33 @@ describe("GhosttyTerminalSurface visibility", () => {
     return event;
   }
 
-  function createHarness() {
+  function createHarness({ touch = false } = {}) {
     vi.useFakeTimers();
+    vi.stubGlobal(
+      "KeyboardEvent",
+      class extends Event {
+        constructor(
+          type: string,
+          private readonly init: KeyboardEventInit,
+        ) {
+          super(type, init);
+          Object.assign(this, {
+            altKey: false,
+            ctrlKey: false,
+            metaKey: false,
+            shiftKey: false,
+            repeat: false,
+            isComposing: false,
+            ...init,
+          });
+        }
+        getModifierState(modifier: string) {
+          return modifier === "CapsLock"
+            ? this.init.modifierCapsLock === true
+            : modifier === "NumLock" && this.init.modifierNumLock === true;
+        }
+      },
+    );
     const frames = new Map<number, FrameRequestCallback>();
     const resizeTargets = new Map<(entries: { target: Element }[]) => void, Set<Element>>();
     const paint = vi.fn((_operation: string, _args: ReadonlyArray<unknown>) => {});
@@ -89,6 +114,8 @@ describe("GhosttyTerminalSurface visibility", () => {
       width = 300;
       height = 150;
       value = "";
+      selectionStart = 0;
+      selectionEnd = 0;
       private readonly captures = new Set<number>();
 
       setAttribute() {}
@@ -108,6 +135,10 @@ describe("GhosttyTerminalSurface visibility", () => {
         this.dispatchEvent(new Event("focus"));
       }
       select() {}
+      setSelectionRange(start: number, end: number) {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+      }
       setPointerCapture(pointerId: number) {
         this.captures.add(pointerId);
       }
@@ -157,7 +188,8 @@ describe("GhosttyTerminalSurface visibility", () => {
         clearTimeout,
         setInterval,
         clearInterval,
-        matchMedia: () => Object.assign(new EventTarget(), { matches: false }),
+        matchMedia: (query: string) =>
+          Object.assign(new EventTarget(), { matches: touch && query === "(any-pointer: coarse)" }),
       }),
     );
     vi.stubGlobal(
@@ -286,6 +318,82 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(surface.hasSelection()).toBe(false);
   });
 
+  it.each([
+    { platform: "iPhone", code: "Backspace", keydowns: "initial", kitty: false },
+    { platform: "Linux armv8l", code: "", keydowns: "each", kitty: false },
+    { platform: "iPhone", code: "Backspace", keydowns: "none", kitty: false },
+    { platform: "iPhone", code: "Backspace", keydowns: "initial", kitty: true },
+    { platform: "iPhone", code: "Backspace", keydowns: "none", kitty: false, copy: true },
+    { platform: "iPhone", code: "Backspace", keydowns: "none", kitty: true },
+    { platform: "Linux armv8l", code: "", keydowns: "none", kitty: true },
+    { platform: "Linux armv8l", code: "Unidentified", keydowns: "none", kitty: true },
+    {
+      platform: "Linux armv8l",
+      code: "Backspace",
+      keydowns: "initial",
+      kitty: true,
+      locks: ["CapsLock", "NumLock"],
+    },
+    {
+      platform: "Linux armv8l",
+      code: "Backspace",
+      keydowns: "each",
+      kitty: true,
+      locks: ["CapsLock", "NumLock"],
+    },
+  ])(
+    "keeps native Backspace repeat active for $platform with $keydowns keydowns, Kitty $kitty, copy $copy, and locks $locks",
+    async ({ platform, code, keydowns, kitty, copy = false, locks = [] }) => {
+      vi.stubGlobal("navigator", { platform });
+      const harness = createHarness({ touch: true });
+      const surface = await harness.create({ beforeKey: () => true });
+      if (kitty) surface.write("\x1b[>31u");
+      surface.input.focus();
+      if (copy) {
+        surface.write("copied");
+        surface.selectAll();
+      }
+      const setData = vi.fn();
+      surface.input.dispatchEvent(
+        Object.assign(new Event("copy", { cancelable: true }), { clipboardData: { setData } }),
+      );
+      if (copy) expect(setData).toHaveBeenCalledWith("text/plain", "copied");
+      else expect(setData).not.toHaveBeenCalled();
+      const getModifierState = (modifier: string) => locks.includes(modifier);
+
+      for (let index = 0; index < 3; index += 1) {
+        if (keydowns === "each" || (keydowns === "initial" && index === 0)) {
+          const press = key(surface, "Backspace", code, { repeat: index > 0, getModifierState });
+          expect(press.defaultPrevented).toBe(false);
+        }
+        surface.input.value = "";
+        surface.input.dispatchEvent(
+          Object.assign(new Event("input"), {
+            inputType: "deleteContentBackward",
+            data: null,
+            isComposing: false,
+          }),
+        );
+        expect(surface.input.value.length).toBe(1);
+        expect(surface.input.selectionStart).toBe(1);
+        expect(surface.input.selectionEnd).toBe(1);
+      }
+      key(surface, "Backspace", code, { getModifierState }, "keyup");
+      surface.input.value += "a";
+      surface.input.dispatchEvent(new Event("input"));
+
+      const modifiers =
+        1 + (locks.includes("CapsLock") ? 64 : 0) + (locks.includes("NumLock") ? 128 : 0);
+      const press = `\x1b[127${modifiers > 1 ? `;${modifiers}` : ""}u`;
+      const repeat = keydowns === "none" ? press : `\x1b[127;${modifiers}:2u`;
+      expect(harness.onData.mock.calls.map(([data]) => data)).toEqual(
+        kitty
+          ? [press, repeat, repeat, `\x1b[127;${modifiers}:3u`, "a"]
+          : ["\x7f", "\x7f", "\x7f", "a"],
+      );
+    },
+  );
+
   it("leaves modified history keys with alternate-screen applications", async () => {
     vi.stubGlobal("navigator", { platform: "Linux x86_64" });
     const harness = createHarness();
@@ -367,32 +475,42 @@ describe("GhosttyTerminalSurface visibility", () => {
     ]);
   });
 
-  it("honors host interception, IME candidates, and AltGr before local shortcuts", async () => {
-    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
-    const harness = createHarness();
-    let allow = false;
-    const surface = await harness.create({ beforeKey: () => allow });
-    surface.write("hello\x1b[>31u");
-    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true });
-    key(surface, "a", "KeyA", {}, "keyup");
-    expect(surface.hasSelection()).toBe(false);
-    allow = true;
-    surface.input.value = "候補";
-    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, isComposing: true });
-    key(surface, "a", "KeyA", {}, "keyup");
-    key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, keyCode: 229 });
-    key(surface, "a", "KeyA", {}, "keyup");
-    key(surface, "a", "KeyA", {
-      ctrlKey: true,
-      shiftKey: true,
-      altKey: true,
-      getModifierState: (modifier) => modifier === "AltGraph",
-    });
-    key(surface, "a", "KeyA", {}, "keyup");
-    expect(surface.input.value).toBe("候補");
-    expect(surface.hasSelection()).toBe(false);
-    expect(harness.onData).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "honors host interception, IME candidates, and AltGr with touch %s",
+    async (touch) => {
+      vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+      const harness = createHarness({ touch });
+      let allow = false;
+      const surface = await harness.create({ beforeKey: () => allow });
+      surface.write("hello\x1b[>31u");
+      key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true });
+      key(surface, "a", "KeyA", {}, "keyup");
+      expect(surface.hasSelection()).toBe(false);
+      allow = true;
+      surface.input.value = "候補";
+      key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, isComposing: true });
+      key(surface, "a", "KeyA", {}, "keyup");
+      key(surface, "a", "KeyA", { ctrlKey: true, shiftKey: true, keyCode: 229 });
+      key(surface, "a", "KeyA", {}, "keyup");
+      key(surface, "a", "KeyA", {
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: true,
+        getModifierState: (modifier) => modifier === "AltGraph",
+      });
+      key(surface, "a", "KeyA", {}, "keyup");
+      surface.input.dispatchEvent(
+        Object.assign(new Event("input"), {
+          inputType: "deleteContentBackward",
+          data: null,
+          isComposing: true,
+        }),
+      );
+      expect(surface.input.value).toBe("候補");
+      expect(surface.hasSelection()).toBe(false);
+      expect(harness.onData).not.toHaveBeenCalled();
+    },
+  );
 
   function paste(surface: GhosttyTerminalSurface, text: string) {
     surface.input.dispatchEvent(
@@ -402,56 +520,72 @@ describe("GhosttyTerminalSurface visibility", () => {
     );
   }
 
-  it.each([
-    "key press",
-    "text input",
-    "IME commit",
-    "native paste",
-    "clipboard shortcut",
-    "clipboard action",
-  ])("returns to the bottom on %s while viewing history", async (input) => {
-    const harness = createHarness();
-    const read = Promise.resolve("a");
-    vi.stubGlobal("navigator", {
-      platform: "Linux x86_64",
-      clipboard: { readText: () => read },
-    });
-    const surface = await harness.create({ beforeKey: () => true });
-    surface.write(`${"history\r\n".repeat(30)}prompt`);
-    key(surface, "Home", "Home", { ctrlKey: true, shiftKey: true });
-    harness.flushFrame();
-    expect(surface.isAtBottom()).toBe(false);
+  it.each(
+    [
+      "key press",
+      "text input",
+      "text before sentinel",
+      "IME commit",
+      "native paste",
+      "clipboard shortcut",
+      "clipboard action",
+    ].flatMap((input) => [
+      { input, touch: false },
+      { input, touch: true },
+    ]),
+  )(
+    "returns to the bottom on $input while viewing history with touch $touch",
+    async ({ input, touch }) => {
+      const harness = createHarness({ touch });
+      const read = Promise.resolve("a");
+      vi.stubGlobal("navigator", {
+        platform: "Linux x86_64",
+        clipboard: { readText: () => read },
+      });
+      const surface = await harness.create({ beforeKey: () => true });
+      surface.input.focus();
+      surface.write(`${"history\r\n".repeat(30)}prompt`);
+      key(surface, "Home", "Home", { ctrlKey: true, shiftKey: true });
+      harness.flushFrame();
+      expect(surface.isAtBottom()).toBe(false);
 
-    switch (input) {
-      case "key press":
-        key(surface, "a", "KeyA");
-        break;
-      case "text input":
-        surface.input.value = "a";
-        surface.input.dispatchEvent(new Event("input"));
-        break;
-      case "IME commit":
-        surface.input.dispatchEvent(new Event("compositionstart"));
-        surface.input.value = "a";
-        surface.input.dispatchEvent(Object.assign(new Event("compositionend"), { data: "a" }));
-        break;
-      case "native paste":
-        paste(surface, "a");
-        break;
-      case "clipboard shortcut":
-        key(surface, "v", "KeyV", { ctrlKey: true, shiftKey: true });
-        await read;
-        break;
-      case "clipboard action":
-        await surface.pasteFromClipboard(() => read);
-        break;
-    }
+      switch (input) {
+        case "key press":
+          key(surface, "a", "KeyA");
+          break;
+        case "text input":
+          surface.input.value += "a";
+          surface.input.dispatchEvent(new Event("input"));
+          break;
+        case "text before sentinel":
+          surface.input.value = `a${surface.input.value}`;
+          surface.input.dispatchEvent(new Event("input"));
+          break;
+        case "IME commit":
+          surface.input.dispatchEvent(new Event("compositionstart"));
+          surface.input.value += "a";
+          surface.input.dispatchEvent(Object.assign(new Event("compositionend"), { data: "a" }));
+          break;
+        case "native paste":
+          paste(surface, "a");
+          break;
+        case "clipboard shortcut":
+          key(surface, "v", "KeyV", { ctrlKey: true, shiftKey: true });
+          await read;
+          break;
+        case "clipboard action":
+          await surface.pasteFromClipboard(() => read);
+          break;
+      }
 
-    expect(harness.onData.mock.calls).toEqual([["a"]]);
-    expect(surface.isAtBottom()).toBe(true);
-    harness.flushFrame();
-    expect(harness.renderedSnapshot.rowData.some((row) => row.text.includes("prompt"))).toBe(true);
-  });
+      expect(harness.onData.mock.calls).toEqual([["a"]]);
+      expect(surface.isAtBottom()).toBe(true);
+      harness.flushFrame();
+      expect(harness.renderedSnapshot.rowData.some((row) => row.text.includes("prompt"))).toBe(
+        true,
+      );
+    },
+  );
 
   it.each([
     ["Control", "ControlLeft", { ctrlKey: true }],
