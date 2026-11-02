@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import {
   memo,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -60,6 +61,9 @@ import {
 } from "react";
 
 import { useRightPanelStore } from "../../rightPanelStore";
+import { readLocalApi } from "../../localApi";
+import { isElectron } from "../../env";
+import { SidebarPointerSensor } from "../Sidebar.pointer";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
@@ -655,6 +659,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const touchMenuSensorRef = useRef<SidebarPointerSensor | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases document gesture listeners if a row unmounts during a touch hold
+  useEffect(() => () => touchMenuSensorRef.current?.cancel(), []);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
@@ -832,6 +839,41 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const handleContextMenu = (event: ReactMouseEvent) => {
     event.preventDefault();
     onContextMenu(threadRef, { x: event.clientX, y: event.clientY });
+  };
+  const handleTouchPointerDown = (event: ReactPointerEvent) => {
+    if (
+      isElectron ||
+      event.pointerType !== "touch" ||
+      !event.isPrimary ||
+      event.button !== 0 ||
+      props.sortable?.listeners?.onPointerDown ||
+      isRenaming ||
+      (event.target instanceof Element &&
+        event.target.closest('button, a, input, textarea, select, [contenteditable="true"]'))
+    )
+      return;
+    event.stopPropagation();
+    touchMenuSensorRef.current?.cancel();
+    touchMenuSensorRef.current = new SidebarPointerSensor({
+      active: threadKey,
+      event: event.nativeEvent,
+      options: {
+        distance: 6,
+        touchDragDisabled: true,
+        onTouchHold: (_key, point) => onContextMenu(threadRef, point),
+        onTouchHoldCancel: () => void readLocalApi()?.contextMenu.close(),
+        onAttach: () => {},
+        onFinish: () => {
+          touchMenuSensorRef.current = null;
+        },
+      },
+      onPending: () => {},
+      onStart: () => {},
+      onMove: () => {},
+      onEnd: () => {},
+      onCancel: () => {},
+      onAbort: () => {},
+    });
   };
   const handleKeyDown = (event: ReactKeyboardEvent) => {
     if (event.target !== event.currentTarget) return;
@@ -1228,6 +1270,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
                 onContextMenu={handleContextMenu}
+                onPointerDown={handleTouchPointerDown}
               />
             }
           >
@@ -1417,6 +1460,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
               onContextMenu={handleContextMenu}
+              onPointerDown={handleTouchPointerDown}
             />
           }
         >

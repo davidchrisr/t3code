@@ -29,7 +29,7 @@ function setup(open = false) {
     open,
     onOpenChange,
   });
-  const touch = (type: string, x: number, y: number, count = 1) => {
+  const touch = (type: string, x: number, y: number, count = 1, claimed = false) => {
     const points = Array.from({ length: count }, (_, identifier) => ({
       identifier,
       clientX: x,
@@ -41,6 +41,7 @@ function setup(open = false) {
       changedTouches: list,
     });
     Object.defineProperty(event, "target", { value: target });
+    if (claimed) event.preventDefault();
     document.dispatchEvent(event);
     return event;
   };
@@ -95,6 +96,14 @@ describe("mobile sidebar swipe", () => {
     expect(state.touch("touchmove", 180, 100).defaultPrevented).toBe(true);
     state.touch("touchend", 120, 100);
     expect(state.onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("leaves a touch drag claimed by a sidebar row to its gesture handler", () => {
+    using state = setup(true);
+    state.touch("touchstart", 200, 100);
+    state.touch("touchmove", 180, 100, 1, true);
+    state.touch("touchend", 120, 100);
+    expect(state.onOpenChange).not.toHaveBeenCalled();
   });
 
   it("preserves a button tap whose compatibility click was suppressed at the edge", () => {
