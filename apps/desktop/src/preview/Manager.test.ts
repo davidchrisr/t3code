@@ -1903,9 +1903,9 @@ describe("PreviewManager", () => {
         ) as unknown as typeof contents.debugger.sendCommand;
         fromId.mockReturnValue(contents);
         const manager = yield* PreviewManager.PreviewManager;
-        const capturing = yield* Queue.unbounded<boolean>();
+        const capturing = yield* Queue.unbounded<PreviewManager.PreviewTabState>();
         yield* manager.subscribeStateChanges((_tabId, state) =>
-          Queue.offer(capturing, state.capturing).pipe(Effect.asVoid),
+          Queue.offer(capturing, state).pipe(Effect.asVoid),
         );
         const attached = yield* Deferred.make<void>();
         yield* host.events.pipe(
@@ -1934,9 +1934,18 @@ describe("PreviewManager", () => {
             }),
           }),
         );
-        expect(yield* Queue.take(capturing)).toBe(true);
+        const preparing = yield* Queue.take(capturing);
+        expect(preparing.capturing).toBe(true);
+        host.updatePresentation(
+          {
+            tabId: "tab_1",
+            visible: false,
+            captureReady: { requestId: preparing.captureRequestId!, webContentsId: 42 },
+          },
+          7,
+        );
         screenshot.resolve({ data: "" });
-        expect(yield* Queue.take(capturing)).toBe(false);
+        expect((yield* Queue.take(capturing)).capturing).toBe(false);
       }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 

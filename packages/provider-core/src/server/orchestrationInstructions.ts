@@ -33,7 +33,7 @@ export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code browser
 
-When browser work was asked, \`preview_*\` is the browser you share with the user: \`preview_status\` first, then \`preview_open\` if no tab can be automated. Prefer snapshot locators over coordinates. Switch browsers only if the tools are absent or \`preview_open\` says unsupported, the user asks, or two preview calls fail on one step. Then quote the error and switch.
+For browser work, use \`preview_*\` in T3. Call \`preview_status\`, then \`preview_open\` if needed. Prefer snapshot locators. Follow preview_snapshot's recovery steps after capture failure, including reopening a stuck user-controlled tab. DOM cannot verify appearance. Report failed recovery and stop; switch browsers only when the user or an invoked workflow asks.
 `;
 
 const T3_CODE_DEVICE_TOOLS = ["device_list", "device_open", "device_screenshot", "device_close"];

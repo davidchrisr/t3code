@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   registerWebview: vi.fn<DesktopPreviewBridge["registerWebview"]>(),
   getPreviewConfig: vi.fn<DesktopPreviewBridge["getPreviewConfig"]>(),
   updatePresentation: vi.fn<NonNullable<DesktopPreviewBridge["updatePresentation"]>>(),
+  captureRequestId: vi.fn<() => number | null>(),
 }));
 
 vi.mock(import("~/env"), async (original) => ({ ...(await original()), isElectron: true }));
@@ -50,7 +51,7 @@ vi.mock(import("~/components/preview/previewBridge"), async (original) => ({
 
 vi.mock(import("~/components/preview/usePreviewBridge"), async (original) => ({
   ...(await original()),
-  usePreviewBridge: () => undefined,
+  usePreviewBridge: () => mocks.captureRequestId(),
 }));
 
 import {
@@ -89,6 +90,7 @@ function setup(): Disposable {
     preloadUrl: null,
   });
   mocks.updatePresentation.mockReset().mockResolvedValue(undefined);
+  mocks.captureRequestId.mockReset().mockReturnValue(null);
   return {
     [Symbol.dispose]() {
       resetPreviewStateForTests();
@@ -129,14 +131,25 @@ describe("ElectronBrowserHost", () => {
     const wrapper = screen.container.querySelector<HTMLElement>("[data-preview-viewport]")!;
     const tabId = wrapper.dataset.previewViewport!;
     const guest = wrapper.querySelector("webview");
+    Object.defineProperty(guest, "getWebContentsId", { value: () => 17 });
     await vi.waitFor(() => expect(wrapper.style.left).toBe("-100000px"));
     const capture = createCaptureActivity(tabId);
     using _capture = { [Symbol.dispose]: capture.release };
+    mocks.captureRequestId.mockReturnValue(1);
+    mocks.updatePresentation.mockImplementation(async (input) => {
+      if (!input.captureReady) return;
+      expect(wrapper.getBoundingClientRect().left).toBe(0);
+      expect(wrapper.getBoundingClientRect().width).toBeGreaterThan(0);
+    });
     await act(() => capture.update(true));
     await vi.waitFor(() => {
       expect(wrapper.style.left).toBe("0px");
       expect(wrapper.dataset.previewRendering).toBe("active");
-      expect(mocks.updatePresentation).toHaveBeenLastCalledWith({ tabId, visible: false });
+      expect(mocks.updatePresentation).toHaveBeenCalledWith({
+        tabId,
+        visible: false,
+        captureReady: { requestId: 1, webContentsId: 17 },
+      });
     });
     await act(() => capture.update(false));
     await vi.waitFor(() => {

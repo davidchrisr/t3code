@@ -85,6 +85,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import { CaptureQueue } from "./CaptureQueue.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -331,7 +332,7 @@ interface ServerTab {
   } | null;
 
   recordingStart: Promise<Recording> | null;
-  captureLock: Promise<void>;
+  captureLock: CaptureQueue;
   capturing: number;
 }
 
@@ -856,7 +857,7 @@ const make = Effect.gen(function* () {
       initialNavigation: null,
       navigationGeneration: 0,
       abortedNavigation: null,
-      captureLock: Promise.resolve(),
+      captureLock: new CaptureQueue(),
       capturing: 0,
     };
     if (!desktop) {
@@ -1653,14 +1654,24 @@ const make = Effect.gen(function* () {
     });
   };
 
-  const withCaptureLock = <A>(tab: ServerTab, operation: () => Promise<A>): Promise<A> => {
-    const run = tab.captureLock.then(() => {
-      if (tab.closing) throw new Error("The preview tab closed.");
-      return operation();
-    });
-    tab.captureLock = run.then(constVoid, constVoid);
-    return run;
-  };
+  const withCaptureLock = <A>(
+    tab: ServerTab,
+    operation: (signal: AbortSignal) => Promise<A>,
+    timeoutMs?: number,
+  ): Promise<A> =>
+    tab.captureLock.run(
+      (signal) => {
+        if (tab.closing) throw new Error("The preview tab closed.");
+        return operation(signal);
+      },
+      timeoutMs,
+      (started) =>
+        new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationTimeoutError",
+          "The browser capture did not finish. Check preview_status and reopen the stuck tab.",
+          { timeoutMs, captureStage: started ? "snapshot" : "capture-queue" },
+        ),
+    );
 
   const startRecording = (tab: ServerTab): Promise<Recording> => {
     const started = withCaptureLock(tab, async () => {
@@ -1724,27 +1735,60 @@ const make = Effect.gen(function* () {
     return started;
   };
 
-  const withScreencastsPaused = <A>(tab: ServerTab, capture: () => Promise<A>): Promise<A> =>
-    withCaptureLock(tab, async () => {
-      tab.capturing += 1;
-      const recording = tab.recording;
-      try {
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.pause()),
-          recording?.session.send("Page.stopScreencast").catch(constVoid),
-        ]);
-        return await capture();
-      } finally {
-        tab.capturing -= 1;
+  const withScreencastsPaused = <A>(
+    tab: ServerTab,
+    capture: (deadline: number) => Promise<A>,
+  ): Promise<A> => {
+    const deadline = Date.now() + 10_000;
+    return withCaptureLock(
+      tab,
+      async (signal) => {
+        tab.capturing += 1;
+        let held = true;
+        const aborted = Promise.withResolvers<never>();
+        const release = () => {
+          if (!held) return;
+          held = false;
+          tab.capturing -= 1;
+        };
+        const abort = () => {
+          release();
+          aborted.reject(signal.reason);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        const recording = tab.recording;
+        let recordingPaused: Promise<unknown> | undefined;
+        try {
+          const paused = [...tab.viewers].map((viewer) => viewer.pause());
+          recordingPaused = recording?.session.send("Page.stopScreencast").catch(constVoid);
+          return await Promise.race([
+            Promise.all([...paused, recordingPaused]).then(() => {
+              signal.throwIfAborted();
+              return capture(deadline);
+            }),
+            aborted.promise,
+          ]);
+        } finally {
+          signal.removeEventListener("abort", abort);
+          release();
 
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.resume()),
-          recording && tab.recording === recording
-            ? recording.session.send("Page.startScreencast", RECORDING_SCREENCAST).catch(constVoid)
-            : undefined,
-        ]);
-      }
-    });
+          if (tab.capturing === 0 && !tab.closing)
+            await Promise.all([
+              ...[...tab.viewers].map((viewer) => viewer.resume()),
+              recording && tab.recording === recording
+                ? recordingPaused?.then(() => {
+                    if (tab.capturing !== 0 || tab.closing || tab.recording !== recording) return;
+                    return recording.session
+                      .send("Page.startScreencast", RECORDING_SCREENCAST)
+                      .catch(constVoid);
+                  })
+                : undefined,
+            ]);
+        }
+      },
+      10_000,
+    );
+  };
 
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
@@ -2155,9 +2199,10 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(tab, () =>
+        return withScreencastsPaused(tab, (deadline) =>
           ServerBrowserPage.snapshot({
             ...tab,
+            deadline,
             renderScale: tab.desktop ? "display" : RENDER_SCALE,
           }),
         );
@@ -2469,8 +2514,9 @@ const make = Effect.gen(function* () {
     const startScreencast = (scale: number) => {
       screencastScale = scale;
       screencastParams = screencastParams.then(async () => {
-        if (tab.capturing > 0) return;
+        if (tab.capturing > 0 || tab.closing) return;
         await session.send("Page.stopScreencast").catch(constVoid);
+        if (tab.capturing > 0 || tab.closing) return;
         await session
           .send("Page.startScreencast", {
             format: "jpeg",
@@ -2539,8 +2585,11 @@ const make = Effect.gen(function* () {
     broadcastControl(tab);
     pushFileChooser(tab);
     const pushStill = async () => {
-      const data = await withCaptureLock(tab, () =>
-        ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
+      const deadline = Date.now() + 5_000;
+      const data = await withCaptureLock(
+        tab,
+        () => ServerBrowserPage.captureViewport(tab.cdp, { format: "jpeg", quality, deadline }),
+        5_000,
       ).catch(() => null);
       if (data) viewer.push({ _tag: "frame", data: Buffer.from(data, "base64"), ack: Effect.void });
     };

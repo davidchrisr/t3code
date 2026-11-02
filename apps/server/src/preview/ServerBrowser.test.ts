@@ -485,25 +485,207 @@ it.live.each([false, true])("reports desktop visibility for native tabs only (%s
   ).pipe(Effect.provide(layer)),
 );
 
-it.live("snapshot failures report the capture deadline instead of the broker budget", () =>
+it.live.each([
+  { stage: "snapshot", timeoutMs: 10_000, captureStage: "snapshot" },
+  { stage: "capture-layout", timeoutMs: 2_000, captureStage: "screenshot" },
+])(
+  "$stage failures report the capture deadline instead of the broker budget",
+  ({ stage, timeoutMs, captureStage }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        const context = contexts[0]!;
+        const cdp = context.sessions[0]!;
+        if (stage === "snapshot") {
+          context.page.ariaSnapshot.mockRejectedValue(
+            Object.assign(new Error("Snapshot timed out"), { name: "TimeoutError" }),
+          );
+        } else {
+          const send = cdp.send.getMockImplementation()!;
+          cdp.send.mockImplementation((method, params) =>
+            method === "Page.captureScreenshot"
+              ? Promise.reject(
+                  new Error(
+                    "Protocol error (Page.captureScreenshot): [T3_CAPTURE_READY_TIMEOUT] The browser renderer did not acknowledge its capture layout.",
+                  ),
+                )
+              : send(method, params),
+          );
+        }
+        const error = yield* broker
+          .invoke<PreviewAutomationSnapshot>({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: {},
+          })
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "PreviewAutomationTimeoutError",
+          timeoutMs,
+          captureStage,
+        });
+        expect(error.message).toContain(
+          `Preview automation snapshot timed out after ${timeoutMs}ms.`,
+        );
+        expect(error.message).toContain("Check preview_status");
+        if (stage === "capture-layout") {
+          expect(
+            cdp.send.mock.calls.filter(([method]) => method === "Page.captureScreenshot"),
+          ).toHaveLength(1);
+        }
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
+it.live("a timed-out viewer still cannot overlap a snapshot's native capture", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, tabId } = yield* ready;
-      contexts[0]!.page.ariaSnapshot.mockRejectedValue(
-        Object.assign(new Error("Snapshot timed out"), { name: "TimeoutError" }),
+      const { browser, broker, tabId } = yield* ready;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+      const context = contexts[0]!;
+      const nativeCapture = Promise.withResolvers<Record<string, unknown>>();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => nativeCapture.resolve({ data: PNG_HEADER })),
       );
-      const error = yield* broker
+      const started = Promise.withResolvers<void>();
+      let nativeCaptures = 0;
+      const intercept = (session: (typeof context.sessions)[number]) => {
+        const send = session.send.getMockImplementation()!;
+        session.send.mockImplementation((method, params) => {
+          if (method !== "Page.captureScreenshot") return send(method, params);
+          nativeCaptures++;
+          started.resolve();
+          return nativeCapture.promise;
+        });
+      };
+      intercept(context.sessions[0]!);
+      const newSession = context.newCDPSession;
+      context.newCDPSession = async (target) => {
+        const session = await newSession(target);
+        intercept(session);
+        return session;
+      };
+      const attaching = yield* browser
+        .attachViewer(viewerInput(tabId, false))
+        .pipe(Effect.forkScoped);
+      yield* Effect.promise(() => started.promise);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(5_000));
+      yield* Fiber.join(attaching);
+      const treeStarted = Promise.withResolvers<void>();
+      context.page.ariaSnapshot.mockImplementation(async () => {
+        treeStarted.resolve();
+        return '- button "delete" [ref=e1]';
+      });
+      const snapshot = yield* broker
         .invoke<PreviewAutomationSnapshot>({
           scope,
           tabId,
           operation: "snapshot",
           input: {},
         })
-        .pipe(Effect.flip);
-      expect(error).toMatchObject({ _tag: "PreviewAutomationTimeoutError", timeoutMs: 10_000 });
-      expect(error.message).toBe("Preview automation snapshot timed out after 10000ms.");
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.promise(() => treeStarted.promise);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(5_000));
+      const error = yield* Fiber.join(snapshot);
+      expect(nativeCaptures).toBe(1);
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationTimeoutError",
+        timeoutMs: 5_000,
+        captureStage: "capture-queue",
+      });
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.live.each(["viewer", "recording", "viewer-resume"])(
+  "a stuck %s operation resumes healthy viewers on timeout without interrupting the next capture",
+  (stuck) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        const context = contexts[0]!;
+        yield* browser.attachViewer(viewerInput(tabId, false));
+        const firstViewer = context.sessions.at(-1)!;
+        yield* browser.attachViewer(viewerInput(tabId, false));
+        const healthy = context.sessions.at(-1)!;
+        if (stuck === "recording") {
+          yield* broker.invoke({ scope, tabId, operation: "recordingStart", input: {} });
+        }
+        const blocked = stuck === "recording" ? context.sessions.at(-1)! : firstViewer;
+        const paused = Promise.withResolvers<Record<string, unknown>>();
+        const pauseStarted = Promise.withResolvers<void>();
+        const nextPauseStarted = Promise.withResolvers<void>();
+        const treeStarted = Promise.withResolvers<void>();
+        const tree = Promise.withResolvers<string>();
+        let blockedPauses = 0;
+        let nextCapture = false;
+        const blockedSend = blocked.send.getMockImplementation()!;
+        blocked.send.mockClear().mockImplementation((method, params) => {
+          if (
+            method === "Page.stopScreencast" &&
+            ++blockedPauses === (stuck === "viewer-resume" ? 2 : 1)
+          ) {
+            pauseStarted.resolve();
+            return paused.promise;
+          }
+          return blockedSend(method, params);
+        });
+        const healthySend = healthy.send.getMockImplementation()!;
+        healthy.send.mockClear().mockImplementation((method, params) => {
+          if (method === "Page.stopScreencast" && nextCapture) nextPauseStarted.resolve();
+          return healthySend(method, params);
+        });
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            paused.resolve({});
+            tree.resolve('- button "delete" [ref=e1]');
+          }),
+        );
+        const first = yield* broker
+          .invoke({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: {},
+          })
+          .pipe(Effect.flip, Effect.forkScoped);
+        yield* Effect.promise(() => pauseStarted.promise);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000));
+        expect(yield* Fiber.join(first)).toMatchObject({ _tag: "PreviewAutomationTimeoutError" });
+        const starts = (session: typeof healthy) =>
+          session.send.mock.calls.filter(([method]) => method === "Page.startScreencast").length;
+        expect(starts(healthy)).toBe(1);
+        expect(starts(blocked)).toBe(0);
+        expect(context.page.ariaSnapshot).toHaveBeenCalledTimes(stuck === "viewer-resume" ? 1 : 0);
+        context.page.ariaSnapshot.mockImplementation(() => {
+          treeStarted.resolve();
+          return tree.promise;
+        });
+        nextCapture = true;
+        const next = yield* broker
+          .invoke<PreviewAutomationSnapshot>({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: {},
+          })
+          .pipe(Effect.forkScoped);
+        yield* Effect.promise(() => nextPauseStarted.promise);
+        paused.resolve({});
+        yield* Effect.promise(() => treeStarted.promise);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+        expect(starts(healthy)).toBe(1);
+        expect(starts(blocked)).toBe(0);
+        tree.resolve('- button "delete" [ref=e1]');
+        yield* Fiber.join(next);
+        expect(starts(healthy)).toBe(2);
+        expect(starts(blocked)).toBe(1);
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 it.live("tells the desktop once per thread when its agent turns start and end", () =>

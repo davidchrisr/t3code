@@ -2,6 +2,8 @@
 
 import {
   type BrowserRecordingFrameRate,
+  DESKTOP_CAPTURE_READY_TIMEOUT_MARKER,
+  DESKTOP_CAPTURE_READY_TIMEOUT_MS,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type PreviewAutomationClickInput,
   type PreviewAutomationConsoleEntry,
@@ -205,6 +207,7 @@ const withoutTreeDataPayloads = (tree: string) =>
 
 // The broker waits 15s for the host; a snapshot, retry included, answers well before.
 const SNAPSHOT_TIMEOUT_MS = 10_000;
+const VIEWPORT_CAPTURE_TIMEOUT_MS = 5_000;
 const FRAME_ANSWER_MS = 1_000;
 
 // Include password and CSS-masked text in open shadow roots, normalized like accessible text.
@@ -236,7 +239,7 @@ const tooBusy = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationTimeoutError",
     "The page was too busy to capture a snapshot in time. Wait for it to settle and take another snapshot.",
-    { timeoutMs: SNAPSHOT_TIMEOUT_MS },
+    { timeoutMs: SNAPSHOT_TIMEOUT_MS, captureStage: "snapshot" },
   );
 
 const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no snapshot was taken.";
@@ -447,15 +450,67 @@ const readPageMetrics = async (cdp: CDPSession) => {
 
 // Never pass a clip scale: Chromium mirrors the top-left of the page into a `backdrop-filter`
 // in any capture it shrinks.
+const viewportCaptures = new WeakMap<CDPSession, Promise<string>>();
+
 export const captureViewport = async (
   cdp: CDPSession,
-  options: { readonly format: "png" | "jpeg"; readonly quality?: number },
+  options: {
+    readonly format: "png" | "jpeg";
+    readonly quality?: number;
+    readonly deadline?: number;
+  },
 ) => {
-  const { data } = await cdp.send("Page.captureScreenshot", {
-    format: options.format,
-    ...(options.quality === undefined ? {} : { quality: options.quality }),
+  const previous = viewportCaptures.get(cdp);
+  const controller = new AbortController();
+  let started = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutError = () =>
+    new ServerBrowserOperationError(
+      "PreviewAutomationTimeoutError",
+      "The viewport screenshot did not finish. Check preview_status and reopen the stuck tab before another capture.",
+      {
+        timeoutMs: VIEWPORT_CAPTURE_TIMEOUT_MS,
+        captureStage: started ? "screenshot" : "capture-queue",
+      },
+    );
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = timeoutError();
+      controller.abort(error);
+      reject(error);
+    }, VIEWPORT_CAPTURE_TIMEOUT_MS);
   });
-  return data;
+  const capture = (previous?.then(constVoid, constVoid) ?? Promise.resolve()).then(async () => {
+    controller.signal.throwIfAborted();
+    if (Date.now() >= (options.deadline ?? Number.POSITIVE_INFINITY)) throw timeoutError();
+    started = true;
+    const { data } = await cdp
+      .send("Page.captureScreenshot", {
+        format: options.format,
+        ...(options.quality === undefined ? {} : { quality: options.quality }),
+      })
+      .catch((cause: unknown) => {
+        if (
+          cause instanceof Error &&
+          cause.message.includes(DESKTOP_CAPTURE_READY_TIMEOUT_MARKER)
+        ) {
+          throw new ServerBrowserOperationError(
+            "PreviewAutomationTimeoutError",
+            "The browser renderer did not acknowledge its capture layout.",
+            { timeoutMs: DESKTOP_CAPTURE_READY_TIMEOUT_MS, captureStage: "screenshot" },
+          );
+        }
+        throw cause;
+      });
+    return data;
+  });
+  viewportCaptures.set(cdp, capture);
+  void capture
+    .finally(() => {
+      if (viewportCaptures.get(cdp) === capture) viewportCaptures.delete(cdp);
+    })
+    .catch(constVoid);
+  return Promise.race([capture, expired]).finally(() => clearTimeout(timer));
 };
 
 /** Runs in the page's own isolated world, as the server has no image library. */
@@ -496,6 +551,7 @@ const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
 };
 
 type SnapshotInput = {
+  readonly deadline?: number;
   readonly page: Page;
   readonly cdp: CDPSession;
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
@@ -534,7 +590,9 @@ const capture = async (
   invalidateRefs(input.page);
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
+  if (Date.now() >= deadline) throw tooBusy();
   const before = await read();
+  if (Date.now() >= deadline) throw tooBusy();
   // Bracket the tree with value reads to detect changes; await tree completion before retrying failed captures.
   const pageAndScreenshot = Promise.all([
     input.page.evaluate(SNAPSHOT_SCRIPT) as Promise<
@@ -543,7 +601,7 @@ const capture = async (
         "url" | "title" | "loading" | "visibleText" | "interactiveElements"
       >
     >,
-    captureViewport(input.cdp, { format: "png" }).then((png) =>
+    captureViewport(input.cdp, { format: "png", deadline }).then((png) =>
       scale < 1 ? shrinkPng(input.cdp, png, scale) : png,
     ),
   ]);
@@ -602,10 +660,14 @@ const capture = async (
 const snapshotTurns = new WeakMap<Page, number>();
 
 export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
-  const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
+  const deadline = Math.min(
+    input.deadline ?? Number.POSITIVE_INFINITY,
+    Date.now() + SNAPSHOT_TIMEOUT_MS,
+  );
+  if (deadline <= Date.now()) throw tooBusy();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), SNAPSHOT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(tooBusy()), Math.max(0, deadline - Date.now()));
   });
   const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
   snapshotTurns.set(input.page, turn);
@@ -613,6 +675,9 @@ export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationS
   const captured = capture(input, deadline).catch((cause: unknown) =>
     Date.now() < deadline &&
     snapshotTurns.get(input.page) === turn &&
+    !(
+      cause instanceof ServerBrowserOperationError && cause.tag === "PreviewAutomationTimeoutError"
+    ) &&
     !(cause instanceof Error && cause.message === VALUE_TOO_LONG)
       ? capture(input, deadline)
       : Promise.reject(cause),

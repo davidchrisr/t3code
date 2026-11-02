@@ -4,7 +4,7 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
@@ -109,7 +109,7 @@ export function HostedBrowserWebview(props: {
         (presentation.visible && presentation.rect !== null && !document.hidden),
     }),
   );
-  usePreviewBridge({ threadRef, tabId, runtimeTabId, serverDriven });
+  const captureRequestId = usePreviewBridge({ threadRef, tabId, runtimeTabId, serverDriven });
 
   const serverColorScheme = serverRendering?.colorScheme;
   const serverZoomFactor = serverRendering?.zoomFactor;
@@ -316,9 +316,39 @@ export function HostedBrowserWebview(props: {
     viewportWidth,
   ]);
 
+  const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- acknowledges the committed guest layout before the desktop starts a capture
+  useLayoutEffect(() => {
+    if (captureRequestId == null || !renderingActive) return;
+    const wrapper = wrapperRef.current;
+    const guest = webviewRef.current;
+    if (!wrapper || !guest || !previewBridge?.updatePresentation) return;
+    const rect = wrapper.getBoundingClientRect();
+    if (
+      rect.width <= 0 ||
+      rect.height <= 0 ||
+      rect.right <= 0 ||
+      rect.bottom <= 0 ||
+      rect.left >= window.innerWidth ||
+      rect.top >= window.innerHeight
+    )
+      return;
+    let webContentsId: number;
+    try {
+      webContentsId = guest.getWebContentsId();
+    } catch {
+      return;
+    }
+    if (!Number.isInteger(webContentsId) || webContentsId <= 0) return;
+    void previewBridge.updatePresentation({
+      tabId: runtimeTabId,
+      visible: pictureInPicture || (active && !document.hidden),
+      captureReady: { requestId: captureRequestId, webContentsId },
+    });
+  }, [captureRequestId, renderingActive, runtimeTabId, active, pictureInPicture]);
+
   if (!clientSettingsHydrated || !config) return null;
 
-  const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
     renderingActive,

@@ -255,9 +255,18 @@ const classifyResponseError = (
       });
     case "PreviewAutomationTimeoutError": {
       const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
+      const captureStage =
+        typeof error.detail === "object" && error.detail !== null && "captureStage" in error.detail
+          ? error.detail.captureStage
+          : undefined;
       return new PreviewAutomationTimeoutError({
         ...context,
         ...remoteDiagnostics,
+        ...(captureStage === "capture-queue" ||
+        captureStage === "screenshot" ||
+        captureStage === "snapshot"
+          ? { captureStage }
+          : {}),
         ...(remoteTimeoutMs === undefined
           ? {}
           : { timeoutMs: Math.min(context.timeoutMs, remoteTimeoutMs) }),

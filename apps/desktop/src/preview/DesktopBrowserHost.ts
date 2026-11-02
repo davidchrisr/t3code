@@ -1,12 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - Names download files on the shared disk.
 /** The manager owns the single debugger attachment; the relay shares it. */
 import {
+  DESKTOP_CAPTURE_READY_TIMEOUT_MARKER,
+  DESKTOP_CAPTURE_READY_TIMEOUT_MS,
   DesktopBrowserCommand,
   DesktopBrowserEvent,
   type DesktopBrowserEvent as DesktopBrowserEventType,
   type DesktopPreviewPresentationInput,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -66,6 +69,7 @@ interface AttachedTab {
   >;
   /** Whether the client keeps the guest painting, as published on `painting`. */
   painting: boolean;
+  paintReady: { readonly requestId: number; readonly ready: Deferred.Deferred<boolean> } | null;
   /**
    * Driven by the agent since its thread's last turn ended or the guest last throttled. A
    * turn's start can reach us after its first command, so this holds focus once it does.
@@ -106,6 +110,7 @@ export class DesktopBrowserHost extends Context.Service<
     readonly painting: Stream.Stream<{
       readonly key: DesktopBrowserTabKey;
       readonly active: boolean;
+      readonly requestId?: number;
     }>;
   }
 >()("@t3tools/desktop/preview/DesktopBrowserHost") {}
@@ -121,11 +126,13 @@ export const make = Effect.gen(function* () {
   const painting = yield* PubSub.unbounded<{
     readonly key: DesktopBrowserTabKey;
     readonly active: boolean;
+    readonly requestId?: number;
   }>();
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const tabs = new Map<string, AttachedTab>();
   /** Threads whose agent turn runs, by the server's account. */
   const agentTurns = new Set<string>();
+  let paintSequence = 0;
   const presentations = new WeakMap<
     Electron.WebContents,
     { readonly tabKey: string; readonly runtimeTabId: string; visible: boolean }
@@ -241,8 +248,44 @@ export const make = Effect.gen(function* () {
         [...tab.focusPending.values()].some((hold) => hold.paints));
     if (tab.painting === active) return;
     tab.painting = active;
-    runFork(PubSub.publish(painting, { key: tab.key, active }));
+    if (active) {
+      tab.paintReady = { requestId: ++paintSequence, ready: Deferred.makeUnsafe<boolean>() };
+    } else {
+      if (tab.paintReady) Deferred.doneUnsafe(tab.paintReady.ready, Effect.succeed(false));
+      tab.paintReady = null;
+    }
+    runFork(
+      PubSub.publish(painting, {
+        key: tab.key,
+        active,
+        ...(tab.paintReady ? { requestId: tab.paintReady.requestId } : {}),
+      }),
+    );
   };
+
+  const awaitPaintReady = (tab: AttachedTab) =>
+    new Promise<void>((resolve, reject) => {
+      const pending = tab.paintReady;
+      if (!pending) {
+        reject(new Error("The capture layout was released."));
+        return;
+      }
+      runFork(
+        Deferred.await(pending.ready).pipe(
+          Effect.timeout(DESKTOP_CAPTURE_READY_TIMEOUT_MS),
+          Effect.match({
+            onSuccess: (ready) =>
+              ready ? resolve() : reject(new Error("The capture layout was released.")),
+            onFailure: () =>
+              reject(
+                new Error(
+                  `${DESKTOP_CAPTURE_READY_TIMEOUT_MARKER} The browser renderer did not acknowledge its capture layout. Check preview_status, then reopen the stuck tab.`,
+                ),
+              ),
+          }),
+        ),
+      );
+    });
 
   /** A command may wait on the page's next frame, so the guest stays focused until it settles. */
   const holdFocus = <A>(
@@ -351,7 +394,12 @@ export const make = Effect.gen(function* () {
                 relay,
                 () => owner === undefined || !detachedOwners.has(owner),
                 (current, held) =>
-                  held ? holdFocus(tab, method, owner, () => forward(current)) : forward(current),
+                  held
+                    ? holdFocus(tab, method, owner, async () => {
+                        await awaitPaintReady(tab);
+                        return forward(current);
+                      })
+                    : forward(current),
               )
             : method === "Page.startScreencast"
               ? holdFocus(tab, method, owner, forward).catch((cause: unknown) => {
@@ -456,6 +504,7 @@ export const make = Effect.gen(function* () {
       focusUses: 0,
       focusPending: new Map(),
       painting: false,
+      paintReady: null,
       agentUsed: false,
       focusReleasing: false,
       screencasts: new Set(),
@@ -511,7 +560,7 @@ export const make = Effect.gen(function* () {
   };
 
   const updatePresentation = (
-    { tabId, visible }: DesktopPreviewPresentationInput,
+    { tabId, visible, captureReady }: DesktopPreviewPresentationInput,
     rendererId: number | undefined,
   ) => {
     if (rendererId === undefined) return;
@@ -522,6 +571,13 @@ export const make = Effect.gen(function* () {
         tab.debuggee.webContents.hostWebContents?.id === rendererId,
     );
     if (!tab) return;
+    if (
+      captureReady &&
+      tab.paintReady?.requestId === captureReady.requestId &&
+      tab.debuggee.webContents.id === captureReady.webContentsId
+    ) {
+      Deferred.doneUnsafe(tab.paintReady.ready, Effect.succeed(true));
+    }
     if (tab.presentation.visible !== visible) {
       tab.presentation.visible = visible;
       emit({ type: "visibility", ...tab.key, visible });

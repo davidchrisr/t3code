@@ -3,6 +3,7 @@ import {
   type Browser,
   type BrowserContext,
   type CDPSession,
+  type Frame,
   type Page,
 } from "playwright-core";
 import {
@@ -18,34 +19,156 @@ import {
 
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
-it("reports the snapshot's actual deadline when a CDP command never answers", async () => {
-  vi.useFakeTimers();
-  try {
-    const page = {
-      viewportSize: () => ({ width: 1280, height: 800 }),
-      on: vi.fn(),
-      frames: () => [page],
-      mainFrame: () => page,
-    } as unknown as Page;
-    const cdp = { send: () => new Promise(() => {}) } as unknown as CDPSession;
-    const result = expect(
-      ServerBrowserPage.snapshot({
-        page,
-        cdp,
-        renderScale: 1,
-        consoleEntries: [],
-        networkEntries: [],
-        actionTimeline: [],
-      }),
-    ).rejects.toMatchObject({
-      tag: "PreviewAutomationTimeoutError",
-      detail: { timeoutMs: 10_000 },
-    });
-    await Promise.all([result, vi.advanceTimersByTimeAsync(10_000)]);
-  } finally {
-    vi.useRealTimers();
-  }
-});
+it.each([false, true])(
+  "bounds an unanswered viewport capture (predecessor settles: %s)",
+  async (releasePrevious) => {
+    vi.useFakeTimers();
+    try {
+      let release!: (value: { data: string }) => void;
+      const send = vi.fn(
+        () =>
+          new Promise<{ data: string }>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const cdp = { send } as unknown as CDPSession;
+      let failure: unknown;
+      const first = ServerBrowserPage.captureViewport(cdp, { format: "png" }).catch(
+        (cause: unknown) => {
+          failure = cause;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(failure).toMatchObject({
+        tag: "PreviewAutomationTimeoutError",
+        detail: { captureStage: "screenshot" },
+      });
+      await first;
+      const second = expect(
+        ServerBrowserPage.captureViewport(cdp, { format: "png" }),
+      ).rejects.toMatchObject({
+        tag: "PreviewAutomationTimeoutError",
+        detail: { captureStage: releasePrevious ? "screenshot" : "capture-queue" },
+      });
+      if (releasePrevious) {
+        release({ data: "old-frame" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(send).toHaveBeenCalledTimes(2);
+      }
+      await Promise.all([second, vi.advanceTimersByTimeAsync(5_000)]);
+      expect(send).toHaveBeenCalledTimes(releasePrevious ? 2 : 1);
+      release({ data: "old-frame" });
+      await vi.advanceTimersByTimeAsync(0);
+      send.mockResolvedValueOnce({ data: "fresh-frame" });
+      await expect(ServerBrowserPage.captureViewport(cdp, { format: "png" })).resolves.toBe(
+        "fresh-frame",
+      );
+      expect(send).toHaveBeenCalledTimes(releasePrevious ? 3 : 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["unanswered", "frame-session", "reader", "slot"])(
+  "bounds the snapshot deadline and prevents late screenshots (%s)",
+  async (stage) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const preparing = Promise.withResolvers<void>();
+      const nativeStarted = Promise.withResolvers<void>();
+      const values = Promise.withResolvers<{ result: { value: Array<string> } }>();
+      const session = Promise.withResolvers<CDPSession>();
+      const pixels = Promise.withResolvers<{ data: string }>();
+      const never = new Promise(() => {});
+      const header = Buffer.alloc(24);
+      header.writeUInt32BE(1280, 16);
+      header.writeUInt32BE(800, 20);
+      const png = header.toString("base64");
+      const send = vi.fn(async (method: string) => {
+        if (stage === "unanswered") {
+          preparing.resolve();
+          return never;
+        }
+        if (method === "Page.getFrameTree")
+          return {
+            frameTree: {
+              frame: { id: "main" },
+              ...(stage === "frame-session" ? { childFrames: [{ frame: { id: "child" } }] } : {}),
+            },
+          };
+        if (method === "Page.createIsolatedWorld") return { executionContextId: 1 };
+        if (method === "Runtime.evaluate") {
+          if (stage === "reader") {
+            preparing.resolve();
+            return values.promise;
+          }
+          return { result: { value: [] } };
+        }
+        if (method === "Page.captureScreenshot") {
+          nativeStarted.resolve();
+          return stage === "slot" ? pixels.promise : { data: png };
+        }
+        throw new Error(`Unexpected CDP command: ${method}`);
+      });
+      const cdp = { send } as unknown as CDPSession;
+      const child = {} as Frame;
+      const page = {
+        viewportSize: () => ({ width: 1280, height: 800 }),
+        on: vi.fn(),
+        frames: () => (stage === "frame-session" ? [page, child] : [page]),
+        mainFrame: () => page,
+        context: () => ({
+          newCDPSession: () => {
+            preparing.resolve();
+            return session.promise;
+          },
+        }),
+        evaluate: vi.fn(async () => ({
+          url: "about:blank",
+          title: "",
+          loading: false,
+          visibleText: "",
+          interactiveElements: [],
+        })),
+        ariaSnapshot: vi.fn(async () => {
+          preparing.resolve();
+          return '- button "delete" [ref=e1]';
+        }),
+      } as unknown as Page;
+      const previous =
+        stage === "slot" ? ServerBrowserPage.captureViewport(cdp, { format: "png" }) : undefined;
+      if (previous) await nativeStarted.promise;
+      const result = expect(
+        ServerBrowserPage.snapshot({
+          page,
+          cdp,
+          ...(stage === "slot" ? { deadline: 1_000 } : {}),
+          renderScale: 1,
+          consoleEntries: [],
+          networkEntries: [],
+          actionTimeline: [],
+        }),
+      ).rejects.toMatchObject({
+        tag: "PreviewAutomationTimeoutError",
+        detail: { timeoutMs: 10_000 },
+      });
+      await preparing.promise;
+      await Promise.all([result, vi.advanceTimersByTimeAsync(stage === "slot" ? 1_000 : 10_000)]);
+      session.resolve(cdp);
+      values.resolve({ result: { value: [] } });
+      pixels.resolve({ data: png });
+      await previous;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        send.mock.calls.filter(([method]) => method === "Page.captureScreenshot"),
+      ).toHaveLength(stage === "slot" ? 1 : 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 describe("server browser element refs", () => {
   let browser: Browser;
