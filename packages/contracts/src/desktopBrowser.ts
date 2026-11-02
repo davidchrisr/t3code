@@ -2,6 +2,10 @@ import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+export const DESKTOP_CAPTURE_READY_TIMEOUT_MS = 2_000;
+// CDP preserves error messages but discards custom error fields.
+export const DESKTOP_CAPTURE_READY_TIMEOUT_MARKER = "[T3_CAPTURE_READY_TIMEOUT]";
+
 const TabKey = {
   threadId: TrimmedNonEmptyString,
   tabId: TrimmedNonEmptyString,

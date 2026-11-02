@@ -365,6 +365,42 @@ it.effect("distinguishes malformed remote failures", () =>
   ),
 );
 
+it.effect.each(["capture-queue", "screenshot", "snapshot", "private page data"])(
+  "reports safe capture recovery diagnostics without disconnecting the host (%s)",
+  (stage) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        const requests = requestsFrom(yield* broker.connect(makeHost()));
+        yield* Stream.runForEach(requests, (request) =>
+          broker.respond({
+            clientId: "client-1",
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ...(request.operation === "snapshot"
+              ? {
+                  ok: false as const,
+                  error: {
+                    _tag: "PreviewAutomationTimeoutError",
+                    message: "private remote message",
+                    detail: { timeoutMs: 5_000, captureStage: stage },
+                  },
+                }
+              : { ok: true as const, result: "responsive" }),
+          }),
+        ).pipe(Effect.forkScoped({ startImmediately: true }));
+        const error = yield* broker
+          .invoke<void>({ scope, operation: "snapshot", input: {} })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("5000ms");
+        expect(error.message).not.toContain("private");
+        if (stage !== "private page data")
+          expect(error.message).toContain(`Capture stage: ${stage}`);
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("responsive");
+      }),
+    ),
+);
+
 it.effect("does not create host state from focus updates without a live stream", () =>
   Effect.gen(function* () {
     const broker = yield* makeBroker;

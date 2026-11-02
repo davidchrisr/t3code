@@ -766,11 +766,14 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
   {
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
+    captureStage: Schema.optional(Schema.Literals(["capture-queue", "screenshot", "snapshot"])),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return summary;
+    return this.captureStage
+      ? `${summary} Capture stage: ${this.captureStage}. Check preview_status. Reopen the stuck tab once with the same URL and profile; if capture still fails, stop and report it.`
+      : summary;
   }
 }
 

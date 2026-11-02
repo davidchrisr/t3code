@@ -605,6 +605,7 @@ export interface DesktopPreviewTabState {
   controller: "human" | "agent" | "none";
   /** A screenshot or stream of the guest is pending, so the client keeps it painting while hidden. */
   capturing: boolean;
+  captureRequestId?: number | null;
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
 }
@@ -962,6 +963,12 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewPresentationInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   visible: Schema.Boolean,
+  captureReady: Schema.optional(
+    Schema.Struct({
+      requestId: Schema.Int.check(Schema.isGreaterThan(0)),
+      webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
+    }),
+  ),
 });
 export type DesktopPreviewPresentationInput = typeof DesktopPreviewPresentationInputSchema.Type;
 

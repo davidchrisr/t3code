@@ -4,7 +4,7 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { useEffect, useEffectEvent, useRef } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { recordFaviconForThread } from "~/browserFaviconStore";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
@@ -45,7 +45,7 @@ export function usePreviewBridge(input: {
   tabId: string;
   runtimeTabId: string;
   serverDriven?: boolean;
-}): void {
+}) {
   const { threadRef, tabId, runtimeTabId, serverDriven = false } = input;
   const clearBrowserPointer = useBrowserPointerStore((state) => state.clear);
   const reportStatus = useAtomCommand(previewEnvironment.reportStatus, "preview status report");
@@ -56,6 +56,7 @@ export function usePreviewBridge(input: {
   const lastReportedKind = useRef<DesktopPreviewTabState["navStatus"]["kind"] | null>(null);
   const lastDesktopNavStatus = useRef<DesktopPreviewTabState["navStatus"] | null>(null);
   const captureActivity = useRef<ReturnType<typeof createCaptureActivity> | null>(null);
+  const [captureRequestId, setCaptureRequestId] = useState<number | null>(null);
   const handleStateChange = useEffectEvent(
     (changedTabId: string, state: DesktopPreviewTabState): void => {
       if (changedTabId !== runtimeTabId) return;
@@ -64,6 +65,7 @@ export function usePreviewBridge(input: {
       }
       lastDesktopNavStatus.current = state.navStatus;
       captureActivity.current?.update(state.capturing);
+      setCaptureRequestId(state.capturing ? (state.captureRequestId ?? null) : null);
       applyPreviewDesktopState(stableThreadRef, tabId, projectDesktopState(state));
       if (state.favicon) {
         recordFaviconForThread(stableThreadRef, state.favicon);
@@ -105,6 +107,7 @@ export function usePreviewBridge(input: {
     threadId,
     tabId,
   ]);
+  return captureRequestId;
 }
 
 function shouldClearBrowserPointer(

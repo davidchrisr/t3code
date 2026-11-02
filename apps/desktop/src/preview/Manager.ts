@@ -103,6 +103,7 @@ export interface PreviewTabState {
   audible: boolean;
   controller: "human" | "agent" | "none";
   capturing: boolean;
+  captureRequestId?: number | null;
   favicon?: DesktopPreviewFavicon;
   serverTab?: { readonly threadId: string; readonly tabId: string };
   updatedAt: string;
@@ -1948,6 +1949,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         audible: current?.audible ?? false,
         controller: current?.controller ?? "none",
         capturing: current?.capturing ?? false,
+        captureRequestId: current?.captureRequestId ?? null,
         ...(current?.favicon ? { favicon: current.favicon } : {}),
         ...(current?.serverTab ? { serverTab: current.serverTab } : {}),
         updatedAt,
@@ -3238,6 +3240,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     function* (painting: {
       readonly key: { readonly threadId: string; readonly tabId: string };
       readonly active: boolean;
+      readonly requestId?: number;
     }) {
       const tab = [...(yield* SynchronizedRef.get(tabsRef)).values()].find(
         (candidate) =>
@@ -3245,7 +3248,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           candidate.serverTab.tabId === painting.key.tabId,
       );
       if (tab && tab.capturing !== painting.active) {
-        yield* update(tab.tabId, { capturing: painting.active });
+        yield* update(tab.tabId, {
+          capturing: painting.active,
+          captureRequestId: painting.requestId ?? null,
+        });
       }
     },
   );
