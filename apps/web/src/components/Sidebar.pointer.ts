@@ -1,11 +1,14 @@
 import { type PointerEvent as ReactPointerEvent } from "react";
-import { type SensorProps } from "@dnd-kit/core";
+import { TouchSensor, type SensorProps } from "@dnd-kit/core";
 import { getOwnerDocument, getWindow } from "@dnd-kit/utilities";
 
 type Options = {
   distance: number;
   onAttach: (sensor: SidebarPointerSensor) => void;
   onFinish: (started: boolean) => void;
+  onTouchHold?: (activeKey: string, point: { x: number; y: number }) => void;
+  onTouchHoldCancel?: () => void;
+  touchDragDisabled?: boolean;
   /** Return true to claim the move and hide this position from sorting. */
   onMove?: (point: { x: number; y: number }) => boolean;
   /** Return true to consume the release and cancel sorting. */
@@ -13,6 +16,8 @@ type Options = {
 };
 
 export class SidebarPointerSensor {
+  // Safari requires a non-passive listener before the touch gesture starts.
+  static setup = TouchSensor.setup;
   static activators = [
     {
       eventName: "onPointerDown" as const,
@@ -25,6 +30,9 @@ export class SidebarPointerSensor {
   private readonly pointer: PointerEvent;
   private readonly document: Document;
   private readonly window: Window;
+  private holdTimer: number | undefined;
+  private touchHeld = false;
+  private touchMenuOpen = false;
 
   constructor(private readonly props: Omit<SensorProps<Options>, "activeNode" | "context">) {
     this.pointer = props.event as PointerEvent;
@@ -39,18 +47,52 @@ export class SidebarPointerSensor {
     this.window.addEventListener("pagehide", this.cancel);
     this.window.addEventListener("resize", this.cancel);
     this.document.addEventListener("dragstart", this.preventDefault);
-    this.document.addEventListener("contextmenu", this.preventDefault);
+    this.document.addEventListener("contextmenu", this.contextMenu, { capture: true });
+    if (this.isTouchHold()) {
+      this.document.addEventListener("touchmove", this.touchMove, {
+        passive: false,
+        capture: true,
+      });
+      this.document.addEventListener("touchstart", this.touchStart, { capture: true });
+      this.holdTimer = this.window.setTimeout(() => {
+        this.touchHeld = true;
+        this.touchMenuOpen = true;
+        this.document.addEventListener("click", this.suppressClick, { capture: true });
+        this.document.addEventListener("pointerdown", this.clearClickSuppression, {
+          capture: true,
+        });
+        props.options.onTouchHold?.(String(props.active), this.coordinates());
+      }, 500);
+    }
     props.options.onAttach(this);
     props.onPending(props.active, { distance: props.options.distance }, this.coordinates());
   }
 
   private coordinates = () => ({ x: this.pointer.clientX, y: this.pointer.clientY });
+  private isTouchHold = () =>
+    this.pointer.pointerType === "touch" && this.props.options.onTouchHold !== undefined;
   private preventDefault = (event: Event) => event.preventDefault();
+  private contextMenu = (event: Event) => {
+    event.preventDefault();
+    if (this.isTouchHold()) event.stopImmediatePropagation();
+  };
+  private touchStart = (event: TouchEvent) => {
+    if (event.touches.length > 1) this.cancel();
+  };
+  private touchMove = (event: TouchEvent) => {
+    if (this.touchHeld && event.cancelable) event.preventDefault();
+  };
+  private closeTouchMenu = () => {
+    if (!this.touchMenuOpen) return;
+    this.touchMenuOpen = false;
+    this.props.options.onTouchHoldCancel?.();
+  };
   private clearClickSuppression = () => {
     this.document.removeEventListener("click", this.suppressClick, { capture: true });
     this.document.removeEventListener("pointerdown", this.clearClickSuppression, { capture: true });
   };
   private suppressClick = (event: Event) => {
+    event.preventDefault();
     event.stopPropagation();
     this.clearClickSuppression();
   };
@@ -77,6 +119,10 @@ export class SidebarPointerSensor {
           offset,
         );
         return;
+      }
+      if (this.isTouchHold()) {
+        if (!this.touchHeld || this.props.options.touchDragDisabled) return this.cancel();
+        this.closeTouchMenu();
       }
       this.phase = "dragging";
       this.document.addEventListener("click", this.suppressClick, { capture: true });
@@ -113,6 +159,8 @@ export class SidebarPointerSensor {
     if (this.phase === "finished") return;
     const aborted = this.phase === "pending";
     this.phase = "finished";
+    this.window.clearTimeout(this.holdTimer);
+    if (cancelled) this.closeTouchMenu();
     this.document.removeEventListener("pointermove", this.move, { capture: true });
     this.document.removeEventListener("pointerup", this.end, { capture: true });
     this.document.removeEventListener("pointercancel", this.pointerCancel, { capture: true });
@@ -122,7 +170,9 @@ export class SidebarPointerSensor {
     this.window.removeEventListener("pagehide", this.cancel);
     this.window.removeEventListener("resize", this.cancel);
     this.document.removeEventListener("dragstart", this.preventDefault);
-    this.document.removeEventListener("contextmenu", this.preventDefault);
+    this.document.removeEventListener("contextmenu", this.contextMenu, { capture: true });
+    this.document.removeEventListener("touchmove", this.touchMove, { capture: true });
+    this.document.removeEventListener("touchstart", this.touchStart, { capture: true });
     this.document.removeEventListener("selectionchange", this.clearSelection);
     // Suppress the eventual click after cancellation; a fresh pointerdown clears suppression after
     // out-of-document release.

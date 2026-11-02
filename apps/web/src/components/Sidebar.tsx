@@ -1716,15 +1716,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     dropThreadContext(point, contextDragThreads());
     return true;
   };
-  // useSensor memoizes options identity; fresh options rebuild DndContext and every sortable row.
-  const pointerSensorOptions = {
-    distance: SIDEBAR_DRAG_DISTANCE,
-    onAttach: attachDragSensor,
-    onFinish: finishThreadDrag,
-    onMove: moveThreadContextDrag,
-    onDrop: dropThreadContextDrag,
-  };
-  const dndSensors = useSensors(useSensor(SidebarPointerSensor, pointerSensorOptions));
   const sectionByThreadKeyRef = useRef(sectionByThreadKey);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- publishes committed list data to refs read by stable drag and sweep callbacks
   useLayoutEffect(() => {
@@ -2805,6 +2796,31 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
+
+  const openTouchThreadContextMenu = useStableCallback(
+    (activeKey: string, point: { x: number; y: number }) => {
+      const threadRef = parseScopedThreadKey(activeKey);
+      if (threadRef !== null) handleThreadContextMenu(threadRef, point);
+    },
+  );
+  const closeTouchThreadContextMenu = useStableCallback(() => {
+    void readLocalApi()?.contextMenu.close();
+  });
+  // useSensor memoizes options identity; fresh options rebuild DndContext and every sortable row.
+  const pointerSensorOptions = {
+    distance: SIDEBAR_DRAG_DISTANCE,
+    onAttach: attachDragSensor,
+    onFinish: finishThreadDrag,
+    onMove: moveThreadContextDrag,
+    onDrop: dropThreadContextDrag,
+    ...(isElectron
+      ? {}
+      : {
+          onTouchHold: openTouchThreadContextMenu,
+          onTouchHoldCancel: closeTouchThreadContextMenu,
+        }),
+  };
+  const dndSensors = useSensors(useSensor(SidebarPointerSensor, pointerSensorOptions));
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list
   useEffect(() => {

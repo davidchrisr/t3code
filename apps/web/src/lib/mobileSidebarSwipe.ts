@@ -48,7 +48,7 @@ export function observeMobileSidebarSwipe(
   };
   const move = (event: TouchEvent) => {
     if (!gesture) return;
-    if (event.touches.length !== 1) {
+    if (event.defaultPrevented || event.touches.length !== 1) {
       cancel();
       return;
     }
