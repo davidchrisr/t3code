@@ -23,6 +23,7 @@ import {
 import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 import { isMonospaceFamily } from "../../appearanceFonts";
 import { observeResize } from "../../lib/observeResize";
+import { ghosttyKeyForCode, ghosttyKeyForEvent } from "./keyCodes";
 
 const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
@@ -37,6 +38,7 @@ const TERMINAL_GLYPH_FALLBACKS =
 const DEFAULT_TERMINAL_FONT_FAMILY =
   '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", ' + TERMINAL_GLYPH_FALLBACKS;
 const CONTENT_PADDING = 4;
+const TOUCH_INPUT_SENTINEL = "\u200b";
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 const CURSOR_BLINK_INTERVAL_MS = 500;
 /** End an unterminated synchronized update instead of freezing the last frame. */
@@ -382,6 +384,10 @@ function isTerminalCompositionCommitInput(event: Pick<InputEvent, "inputType">):
   );
 }
 
+function encodedKeyCode(event: Pick<KeyboardEvent, "code" | "key">) {
+  return ghosttyKeyForEvent(event) === ghosttyKeyForCode("Backspace") ? "Backspace" : event.code;
+}
+
 export function isTerminalCompositionKey(
   event: Pick<KeyboardEvent, "isComposing" | "key" | "keyCode">,
   composing: boolean,
@@ -599,6 +605,8 @@ export class GhosttyTerminalSurface {
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private selectionMoved = false;
   private composing = false;
+  private readonly touchInput = window.matchMedia("(any-pointer: coarse)").matches;
+  private nativeBackspaceKey: KeyboardEvent | null = null;
   private focused = false;
   private resizeNotified = false;
   private canvasConfigured = false;
@@ -1101,7 +1109,7 @@ export class GhosttyTerminalSurface {
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
     // A consumed repeat still owes the original encoded press a release.
-    if (!event.repeat) this.encodedKeyCodes.delete(event.code);
+    if (!event.repeat) this.encodedKeyCodes.delete(encodedKeyCode(event));
     if (isTerminalAltGraphText(event) || !this.options.beforeKey(event)) return;
     // IME candidates belong to the textarea, even if the key also resembles
     // a local shortcut. Safari signals the initial composition with code 229.
@@ -1204,9 +1212,23 @@ export class GhosttyTerminalSurface {
       return;
     }
     this.clearPrimedCopy();
+    if (
+      this.touchInput &&
+      event.key === "Backspace" &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey
+    ) {
+      // Cancelling the initial keydown stops virtual keyboards from repeating deletion.
+      this.nativeBackspaceKey = event;
+      event.stopPropagation();
+      return;
+    }
+    this.nativeBackspaceKey = null;
     const data = this.core.encodeKey(event);
     if (data.length === 0) return;
-    this.encodedKeyCodes.add(event.code);
+    this.encodedKeyCodes.add(encodedKeyCode(event));
     event.preventDefault();
     event.stopPropagation();
     if (
@@ -1225,6 +1247,11 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
+    if (
+      this.nativeBackspaceKey !== null &&
+      encodedKeyCode(event) === encodedKeyCode(this.nativeBackspaceKey)
+    )
+      this.nativeBackspaceKey = null;
     // macOS can omit V keyup while Command is held.
     if (
       event.code === this.pasteShortcutGesture?.code ||
@@ -1234,7 +1261,7 @@ export class GhosttyTerminalSurface {
     ) {
       this.pasteShortcutGesture = null;
     }
-    if (!this.encodedKeyCodes.delete(event.code)) return;
+    if (!this.encodedKeyCodes.delete(encodedKeyCode(event))) return;
     if (isTerminalCompositionKey(event, this.composing)) {
       return;
     }
@@ -1249,22 +1276,24 @@ export class GhosttyTerminalSurface {
   // A release elsewhere must not leave a press for a later app shortcut to inherit.
   private readonly onWindowKeyUp = (event: KeyboardEvent) => {
     if (event.composedPath().includes(this.input)) return;
-    this.encodedKeyCodes.delete(event.code);
+    this.encodedKeyCodes.delete(encodedKeyCode(event));
   };
 
   // A fresh press proves a release was missed; repeats can span a focus round trip.
   private readonly onWindowKeyDown = (event: KeyboardEvent) => {
-    if (!event.repeat) this.encodedKeyCodes.delete(event.code);
+    if (!event.repeat) this.encodedKeyCodes.delete(encodedKeyCode(event));
   };
 
   private readonly onFocus = () => {
     this.focused = true;
+    if (this.input.value.length === 0) this.resetInput();
     this.cursorOn = true;
     this.requestRender();
   };
 
   private readonly onBlur = () => {
     this.focused = false;
+    this.nativeBackspaceKey = null;
     this.pasteShortcutGesture = null;
     this.refreshHoveredLink();
     this.cursorOn = true;
@@ -1291,10 +1320,12 @@ export class GhosttyTerminalSurface {
   private clearPrimedCopy(): void {
     clearPrimedTerminalCopyInput(this.input, this.primedCopySelection);
     this.primedCopySelection = "";
+    if (!this.composing && this.input.value.length === 0) this.resetInput();
   }
 
   private readonly onCopyEvent = (event: ClipboardEvent) => {
-    const selection = this.hasSelection() ? this.getSelection() : this.input.value;
+    const selection = this.hasSelection() ? this.getSelection() : this.inputText();
+    if (selection.length === 0) return;
     // Menu Copy skips keydown; prime the textarea even without clipboardData for the native action.
     this.primeCopy(selection);
     const result = applyTerminalCopyEvent(selection, event.clipboardData);
@@ -1333,9 +1364,9 @@ export class GhosttyTerminalSurface {
 
   private readonly onCompositionEnd = (event: CompositionEvent) => {
     this.composing = false;
-    const data = this.input.value || event.data;
+    const data = this.inputText() || event.data;
     this.sendInput(data);
-    this.input.value = "";
+    this.resetInput();
     this.compositionInputToSuppress = data;
     this.compositionSuppressionTimer = window.setTimeout(() => {
       this.compositionInputToSuppress = null;
@@ -1346,16 +1377,50 @@ export class GhosttyTerminalSurface {
   private readonly onInput = (event: Event) => {
     const inputEvent = event as InputEvent;
     if (this.composing || inputEvent.isComposing) return;
-    const data = this.input.value || inputEvent.data || "";
+    if (inputEvent.inputType === "deleteContentBackward") {
+      this.clearCompositionInputSuppression();
+      const nativeKey = this.nativeBackspaceKey;
+      const key =
+        nativeKey !== null &&
+        (nativeKey.repeat || !this.encodedKeyCodes.has(encodedKeyCode(nativeKey)))
+          ? nativeKey
+          : new KeyboardEvent("keydown", {
+              key: "Backspace",
+              code: "Backspace",
+              repeat: nativeKey !== null,
+              modifierCapsLock: nativeKey?.getModifierState("CapsLock") ?? false,
+              modifierNumLock: nativeKey?.getModifierState("NumLock") ?? false,
+            });
+      const data = this.core.encodeKey(key);
+      if (data.length > 0) this.encodedKeyCodes.add(encodedKeyCode(key));
+      this.sendInput(data);
+      this.resetInput();
+      return;
+    }
+    this.nativeBackspaceKey = null;
+    const data = this.inputText() || inputEvent.data || "";
     if (data === this.compositionInputToSuppress && isTerminalCompositionCommitInput(inputEvent)) {
       this.clearCompositionInputSuppression();
-      this.input.value = "";
+      this.resetInput();
       return;
     }
     this.clearCompositionInputSuppression();
     this.sendInput(data);
-    this.input.value = "";
+    this.resetInput();
   };
+
+  private inputText(): string {
+    return this.touchInput && this.primedCopySelection.length === 0
+      ? this.input.value.replace(TOUCH_INPUT_SENTINEL, "")
+      : this.input.value;
+  }
+
+  private resetInput(): void {
+    this.primedCopySelection = "";
+    // A virtual keyboard needs content before its caret to keep deleting on a hold.
+    this.input.value = this.touchInput ? TOUCH_INPUT_SENTINEL : "";
+    if (this.touchInput) this.input.setSelectionRange(1, 1);
+  }
 
   private clearCompositionInputSuppression(): void {
     if (this.compositionSuppressionTimer !== null) {
