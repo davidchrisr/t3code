@@ -52,7 +52,7 @@ export function revealServerTabs(
         (surface) => surface.kind === "preview" && surface.resourceId === session.tabId,
       );
     if (surface && force) {
-      useRightPanelStore.getState().activateSurface(threadRef, surface.id);
+      useRightPanelStore.getState().revealSurface(threadRef, surface.id);
     } else if (!surface && options.autoShowFloatingPreview) {
       usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(session.tabId));
     }
