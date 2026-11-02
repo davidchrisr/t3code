@@ -75,6 +75,7 @@ describe("GhosttyTerminalSurface visibility", () => {
     const frames = new Map<number, FrameRequestCallback>();
     const resizeTargets = new Map<(entries: { target: Element }[]) => void, Set<Element>>();
     const paint = vi.fn((_operation: string, _args: ReadonlyArray<unknown>) => {});
+    const buttons: TerminalTestElement[] = [];
     let frameId = 0;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
       frames.set(++frameId, callback);
@@ -86,16 +87,28 @@ describe("GhosttyTerminalSurface visibility", () => {
       parentElement: TerminalTestElement | null = null;
       clientWidth = 168;
       clientHeight = 104;
+      offsetWidth = 140;
+      offsetHeight = 44;
       width = 300;
       height = 150;
       value = "";
+      textContent = "";
+      hidden = false;
+      readOnly = false;
+      children: TerminalTestElement[] = [];
+      attributes = new Map<string, string>();
       private readonly captures = new Set<number>();
 
-      setAttribute() {}
+      setAttribute(name: string, value: string) {
+        this.attributes.set(name, value);
+      }
       append(...children: TerminalTestElement[]) {
+        this.children.push(...children);
         for (const child of children) child.parentElement = this;
       }
       replaceChildren(...children: TerminalTestElement[]) {
+        for (const child of this.children) child.parentElement = null;
+        this.children = [];
         this.append(...children);
       }
       remove() {
@@ -143,7 +156,11 @@ describe("GhosttyTerminalSurface visibility", () => {
       }),
     };
     vi.stubGlobal("document", {
-      createElement: (tag: string) => (tag === "canvas" ? canvas : new TerminalTestElement()),
+      createElement: (tag: string) => {
+        const element = tag === "canvas" ? canvas : new TerminalTestElement();
+        if (tag === "button") buttons.push(element);
+        return element;
+      },
       fonts: Object.assign(new EventTarget(), { load: async () => [], add() {} }),
     });
     vi.stubGlobal(
@@ -188,6 +205,18 @@ describe("GhosttyTerminalSurface visibility", () => {
       requestFrame,
       snapshot,
       onData,
+      get pasteButton() {
+        const button = buttons.find(
+          (button) => button.attributes.get("aria-label") === "Paste into terminal",
+        );
+        if (!button) throw new Error("No terminal paste button");
+        return button;
+      },
+      button(label: string) {
+        const button = buttons.find((button) => button.attributes.get("aria-label") === label);
+        if (!button) throw new Error(`No terminal button: ${label}`);
+        return button;
+      },
       get renderedSnapshot() {
         const result = snapshot.mock.results.at(-1);
         if (result?.type !== "return") throw new Error("No terminal snapshot was rendered");
@@ -222,10 +251,10 @@ describe("GhosttyTerminalSurface visibility", () => {
           }),
         );
       },
-      touch(type: string, clientY: number, pointerId = 2) {
-        canvas.dispatchEvent(
+      touch(type: string, clientY: number, pointerId = 2, clientX = 40, target = canvas) {
+        target.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
-            clientX: 40,
+            clientX,
             clientY,
             pointerId,
             pointerType: "touch",
@@ -402,6 +431,240 @@ describe("GhosttyTerminalSurface visibility", () => {
     );
   }
 
+  function hold(harness: ReturnType<typeof createHarness>, clientY = 5, clientX = 40) {
+    harness.touch("pointerdown", clientY, 2, clientX);
+    vi.advanceTimersByTime(500);
+    harness.touch("pointerup", clientY, 2, clientX);
+    harness.flushFrame();
+  }
+
+  it("opens a hold menu and selects a word without sending a tap to the terminal", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("alpha beta gamma\x1b[?1000h");
+    const focus = vi.spyOn(surface.input, "focus");
+    const menu = harness.pasteButton.parentElement;
+    expect(menu?.hidden).toBe(true);
+
+    hold(harness, 5, 60);
+
+    expect(surface.getSelection()).toBe("beta");
+    expect(menu?.hidden).toBe(false);
+    expect(harness.button("Copy terminal selection").hidden).toBe(false);
+    expect(harness.button("Selection start").hidden).toBe(false);
+    expect(harness.button("Selection end").hidden).toBe(false);
+    expect(focus).not.toHaveBeenCalled();
+    expect(harness.onData).not.toHaveBeenCalled();
+
+    surface.clearSelection();
+    hold(harness, 60);
+    expect(surface.hasSelection()).toBe(false);
+    expect(menu?.hidden).toBe(false);
+    expect(harness.button("Copy terminal selection").hidden).toBe(true);
+
+    key(surface, "Escape", "Escape", {}, "keydown", window);
+    expect(menu?.hidden).toBe(true);
+    hold(harness, 5, 60);
+    expect(surface.hasSelection()).toBe(true);
+    window.dispatchEvent(new Event("pointerdown"));
+    expect(surface.hasSelection()).toBe(false);
+    expect(menu?.hidden).toBe(true);
+  });
+
+  it("keeps tapping for input and swiping for scrollback", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write(`${"history\r\n".repeat(30)}prompt`);
+    const focus = vi.spyOn(surface.input, "focus");
+    harness.touch("pointerdown", 60);
+    harness.touch("pointerup", 60);
+    expect(focus).toHaveBeenCalledOnce();
+
+    harness.touch("pointerdown", 60);
+    harness.touch("pointermove", 90);
+    harness.touch("pointerup", 90);
+    vi.advanceTimersByTime(500);
+    expect(surface.isAtBottom()).toBe(false);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(surface.hasSelection()).toBe(false);
+    expect(harness.pasteButton.parentElement?.hidden).toBe(true);
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("adjusts both touch selection endpoints and copies from a read-only terminal", async () => {
+    const harness = createHarness();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const surface = await harness.create();
+    surface.input.readOnly = true;
+    surface.write("alpha beta gamma");
+    hold(harness, 5, 60);
+    const end = harness.button("Selection end");
+    let y = Number.parseFloat(end.style.top!) + 10;
+    let x = Number.parseFloat(end.style.left!);
+    harness.touch("pointerdown", y, 2, x, end);
+    harness.touch("pointermove", y, 2, 132, end);
+    harness.touch("pointerup", y, 2, 132, end);
+    harness.flushFrame();
+    expect(surface.getSelection()).toBe("beta gamma");
+
+    const start = harness.button("Selection start");
+    y = Number.parseFloat(start.style.top!) + 10;
+    x = Number.parseFloat(start.style.left!);
+    harness.touch("pointerdown", y, 2, x, start);
+    harness.touch("pointermove", y, 2, 4, start);
+    harness.touch("pointerup", y, 2, 4, start);
+    harness.flushFrame();
+    expect(surface.getSelection()).toBe("alpha beta gamma");
+    expect(harness.pasteButton.hidden).toBe(true);
+
+    const clear = surface.clearSelection.bind(surface);
+    const copied = new Promise<void>((resolve) => {
+      vi.spyOn(surface, "clearSelection").mockImplementation(() => {
+        clear();
+        resolve();
+      });
+    });
+    harness.button("Copy terminal selection").dispatchEvent(new Event("click"));
+    expect(writeText).toHaveBeenCalledWith("alpha beta gamma");
+    await copied;
+    expect(surface.hasSelection()).toBe(false);
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("routes an overlapping handle hit to the nearest selection endpoint", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("alpha x gamma");
+    hold(harness, 5, 55);
+    expect(surface.getSelection()).toBe("x");
+    const start = harness.button("Selection start");
+    const end = harness.button("Selection end");
+    const x = Number.parseFloat(start.style.left!);
+    const y = Number.parseFloat(start.style.top!);
+    harness.touch("pointerdown", y, 2, x, end);
+    harness.touch("pointermove", y, 2, 4, start);
+    harness.touch("pointerup", y, 2, 4, start);
+    expect(surface.getSelection()).toBe("alpha x");
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it.each(["swipe", "pointercancel", "multitouch", "hidden", "disposed", "reset"])(
+    "cancels a pending hold on %s",
+    async (cancel) => {
+      const harness = createHarness();
+      const surface = await harness.create();
+      surface.write("alpha beta gamma");
+      harness.touch("pointerdown", 60);
+      if (cancel === "swipe") harness.touch("pointermove", 20);
+      else if (cancel === "pointercancel") harness.touch("pointercancel", 60);
+      else if (cancel === "multitouch") harness.touch("pointerdown", 60, 3);
+      else if (cancel === "hidden") surface.setVisible(false);
+      else if (cancel === "disposed") surface.dispose();
+      else surface.resetAndWrite("replacement");
+      vi.advanceTimersByTime(500);
+      expect(harness.pasteButton.parentElement?.hidden).toBe(true);
+      if (cancel !== "disposed") expect(surface.hasSelection()).toBe(false);
+      expect(harness.onData).not.toHaveBeenCalled();
+      if (cancel === "hidden") {
+        surface.setVisible(true);
+        hold(harness, 5, 60);
+        expect(surface.getSelection()).toBe("beta");
+      }
+    },
+  );
+
+  it("reads the clipboard in the touch gesture and encodes each paste once", async () => {
+    const harness = createHarness();
+    const readText = vi.fn().mockResolvedValue("echo hi\nnext line");
+    vi.stubGlobal("navigator", { clipboard: { readText } });
+    const surface = await harness.create();
+    surface.write("\x1b[?2004h");
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      hold(harness);
+      const focused = new Promise<void>((resolve) => {
+        surface.input.addEventListener("focus", () => resolve(), { once: true });
+      });
+      harness.pasteButton.dispatchEvent(new Event("click"));
+      expect(readText).toHaveBeenCalledTimes(attempt + 1);
+      await focused;
+    }
+
+    expect(harness.onData.mock.calls).toEqual([
+      ["\x1b[200~echo hi\nnext line\x1b[201~"],
+      ["\x1b[200~echo hi\nnext line\x1b[201~"],
+    ]);
+  });
+
+  it.each(["read-only", "hidden", "disposed", "dismissed", "reset"])(
+    "drops touch paste when the terminal becomes %s during the clipboard read",
+    async (state) => {
+      const harness = createHarness();
+      let resolveRead!: (text: string) => void;
+      const read = new Promise<string>((resolve) => {
+        resolveRead = resolve;
+      });
+      const readText = vi.fn(() => read);
+      vi.stubGlobal("navigator", { clipboard: { readText } });
+      const surface = await harness.create();
+      hold(harness);
+      harness.pasteButton.dispatchEvent(new Event("click"));
+      expect(readText).toHaveBeenCalledOnce();
+
+      if (state === "read-only") surface.input.readOnly = true;
+      else if (state === "hidden") surface.setVisible(false);
+      else if (state === "disposed") surface.dispose();
+      else if (state === "dismissed") surface.clearSelection();
+      else surface.resetAndWrite("replacement");
+      resolveRead("echo hi");
+      await read;
+      await vi.advanceTimersByTimeAsync(0);
+
+      harness.pasteButton.dispatchEvent(new Event("click"));
+      expect(readText).toHaveBeenCalledOnce();
+      expect(harness.onData).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unavailable", "denied"])(
+    "reports %s clipboard access without sending input",
+    async (failure) => {
+      const harness = createHarness();
+      vi.stubGlobal("navigator", {
+        clipboard:
+          failure === "unavailable"
+            ? undefined
+            : {
+                readText: () => Promise.reject(new Error("Permission denied")),
+              },
+      });
+      const surface = await harness.create();
+      hold(harness);
+      const focused = new Promise<void>((resolve) => {
+        surface.input.addEventListener("focus", () => resolve(), { once: true });
+      });
+      harness.pasteButton.dispatchEvent(new Event("click"));
+      await focused;
+
+      const error = harness.pasteButton.parentElement?.children.find(
+        (child) => child.attributes.get("role") === "alert",
+      );
+      expect(error?.hidden).toBe(false);
+      expect(error?.textContent).toMatch(/clipboard/i);
+      expect(harness.onData).not.toHaveBeenCalled();
+
+      vi.stubGlobal("navigator", { clipboard: { readText: async () => "echo hi" } });
+      const recovered = new Promise<void>((resolve) => {
+        surface.input.addEventListener("focus", () => resolve(), { once: true });
+      });
+      harness.pasteButton.dispatchEvent(new Event("click"));
+      await recovered;
+      expect(error?.hidden).toBe(true);
+      expect(harness.onData.mock.calls).toEqual([["echo hi"]]);
+    },
+  );
+
   it.each([
     "key press",
     "text input",
@@ -409,6 +672,7 @@ describe("GhosttyTerminalSurface visibility", () => {
     "native paste",
     "clipboard shortcut",
     "clipboard action",
+    "touch paste",
   ])("returns to the bottom on %s while viewing history", async (input) => {
     const harness = createHarness();
     const read = Promise.resolve("a");
@@ -444,6 +708,13 @@ describe("GhosttyTerminalSurface visibility", () => {
         break;
       case "clipboard action":
         await surface.pasteFromClipboard(() => read);
+        break;
+      case "touch paste":
+        hold(harness);
+        await new Promise<void>((resolve) => {
+          surface.input.addEventListener("focus", () => resolve(), { once: true });
+          harness.pasteButton.dispatchEvent(new Event("click"));
+        });
         break;
     }
 
