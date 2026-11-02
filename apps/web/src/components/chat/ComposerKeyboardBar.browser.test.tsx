@@ -1,7 +1,7 @@
 import type { Editor } from "@tiptap/core";
 import { createRef, useRef, useState, type RefObject } from "react";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { serializeEditorDoc } from "~/composer-rich-text-doc";
 import { act, render } from "../../../test/render";
@@ -73,7 +73,7 @@ it.each([
       editor.view.focus();
     });
 
-    await userEvent.click(screen.getByRole("button", { name: label }));
+    await userEvent.click(page.getByRole("button", { name: label }));
 
     await vi.waitFor(() => {
       expect(serializeEditorDoc(editor.state.doc).value).toBe(`do ${symbol}this`);
@@ -83,7 +83,7 @@ it.each([
   },
 );
 
-it("replaces the selected text and lets Undo restore it", async () => {
+it("replaces the selected text and preserves focus through Undo and Redo", async () => {
   await using screen = await render(<Composer initialValue="choose this" />);
   const editor = editorIn(screen.container);
   await act(() => {
@@ -91,12 +91,19 @@ it("replaces the selected text and lets Undo restore it", async () => {
     editor.view.focus();
   });
 
-  await userEvent.click(screen.getByRole("button", { name: "Insert $ for skills" }));
+  await userEvent.click(page.getByRole("button", { name: "Insert $ for skills" }));
   await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe("$ this"));
-  await userEvent.click(screen.getByRole("button", { name: "Undo", exact: true }));
+  await userEvent.click(page.getByRole("button", { name: "Undo", exact: true }));
 
   await vi.waitFor(() => {
     expect(serializeEditorDoc(editor.state.doc).value).toBe("choose this");
+    expect(document.activeElement).toBe(editor.view.dom);
+  });
+
+  await userEvent.click(page.getByRole("button", { name: "Redo", exact: true }));
+
+  await vi.waitFor(() => {
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("$ this");
     expect(document.activeElement).toBe(editor.view.dom);
   });
 });
@@ -109,7 +116,7 @@ it("uses the editor's backtick wrapping for a text selection", async () => {
     editor.view.focus();
   });
 
-  await userEvent.click(screen.getByRole("button", { name: "Insert backtick" }));
+  await userEvent.click(page.getByRole("button", { name: "Insert backtick" }));
 
   await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe("`code`"));
 });
@@ -122,12 +129,12 @@ it("moves across an entire emoji in both directions", async () => {
     editor.view.focus();
   });
 
-  await userEvent.click(screen.getByRole("button", { name: "Move cursor left" }));
-  await userEvent.click(screen.getByRole("button", { name: "Move cursor left" }));
-  await userEvent.click(screen.getByRole("button", { name: "Insert / for commands" }));
+  await userEvent.click(page.getByRole("button", { name: "Move cursor left" }));
+  await userEvent.click(page.getByRole("button", { name: "Move cursor left" }));
+  await userEvent.click(page.getByRole("button", { name: "Insert / for commands" }));
   await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe("a/👩‍💻b"));
-  await userEvent.click(screen.getByRole("button", { name: "Move cursor right" }));
-  await userEvent.click(screen.getByRole("button", { name: "Insert $ for skills" }));
+  await userEvent.click(page.getByRole("button", { name: "Move cursor right" }));
+  await userEvent.click(page.getByRole("button", { name: "Insert $ for skills" }));
 
   await vi.waitFor(() => {
     expect(serializeEditorDoc(editor.state.doc).value).toBe("a/👩‍💻$b");
@@ -148,8 +155,8 @@ it.each([
       editor.view.focus();
     });
 
-    await userEvent.click(screen.getByRole("button", { name: `Move cursor ${direction}` }));
-    await userEvent.click(screen.getByRole("button", { name: "Insert / for commands" }));
+    await userEvent.click(page.getByRole("button", { name: `Move cursor ${direction}` }));
+    await userEvent.click(page.getByRole("button", { name: "Insert / for commands" }));
 
     await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe(expected));
   },

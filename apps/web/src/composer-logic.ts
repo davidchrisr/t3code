@@ -6,8 +6,6 @@ import type {
 } from "@t3tools/contracts";
 import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
-  assistantCitationLabel,
-  collectAssistantCitations,
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
@@ -46,16 +44,6 @@ export function isPathSuggestionCurrent(
 
 export function formatAssistantCitationForComposer(citation: AssistantCitation, comment = "") {
   return `${serializeAssistantCitation(withAssistantCitationComment(citation, comment))} `;
-}
-
-export function formatCollapsedComposerPrompt(prompt: string): string {
-  let preview = "";
-  let cursor = 0;
-  for (const match of collectAssistantCitations(prompt)) {
-    preview += prompt.slice(cursor, match.start) + assistantCitationLabel(match.citation);
-    cursor = match.end;
-  }
-  return preview + prompt.slice(cursor);
 }
 
 export function composerRequiresModifier(

@@ -10,6 +10,7 @@ function fixture(options: { native?: boolean; overlay?: boolean; desktop?: boole
   });
   const win = {
     innerHeight: 844,
+    document: { documentElement: { clientHeight: 844 } },
     visualViewport: viewport,
     navigator: options.native ? { virtualKeyboard: keyboard } : {},
   };
@@ -57,14 +58,34 @@ describe("software keyboard detection", () => {
   });
 
   it.each([false, true])("falls back to viewport changes with native API present: %s", (native) => {
-    const { store, resize, keyboard } = fixture({ native });
+    const { store, resize, keyboard, win } = fixture({ native });
     const unsubscribe = store.subscribe(() => {});
 
+    resize(760);
+    expect(store.getSnapshot()).toBe(false);
+    resize(680);
+    expect(store.getSnapshot()).toBe(true);
+    resize(600);
+    expect(store.getSnapshot()).toBe(true);
     resize(500);
     expect(store.getSnapshot()).toBe(true);
     resize(550);
     expect(store.getSnapshot()).toBe(true);
     resize(844);
+    expect(store.getSnapshot()).toBe(false);
+
+    win.document.documentElement.clientHeight = 682;
+    win.innerHeight = 682;
+    resize(682, 402);
+    expect(store.getSnapshot()).toBe(false);
+    win.innerHeight = 389;
+    resize(389);
+    expect(store.getSnapshot()).toBe(true);
+    win.innerHeight = 313;
+    resize(313);
+    expect(store.getSnapshot()).toBe(true);
+    win.innerHeight = 682;
+    resize(682);
     expect(store.getSnapshot()).toBe(false);
     expect(keyboard.overlaysContent).toBe(false);
     unsubscribe();
@@ -72,7 +93,8 @@ describe("software keyboard detection", () => {
 
   // regression: #21763 composer Enter sent instead of inserting a newline on software keyboards
   it("detects a docked keyboard when subscribing after it has opened", () => {
-    const { store, resize } = fixture();
+    const { store, resize, win } = fixture();
+    win.innerHeight = 500;
     resize(500);
     const unsubscribe = store.subscribe(() => {});
     expect(store.getSnapshot()).toBe(true);
@@ -107,6 +129,7 @@ describe("software keyboard detection", () => {
     const { store, resize, win } = fixture();
     const unsubscribe = store.subscribe(() => {});
     win.innerHeight = 390;
+    win.document.documentElement.clientHeight = 390;
     resize(390, 844);
     expect(store.getSnapshot()).toBe(false);
     unsubscribe();
