@@ -1,4 +1,11 @@
-import { ChevronLeftIcon, ChevronRightIcon, KeyboardOffIcon, Undo2Icon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  KeyboardOffIcon,
+  Redo2Icon,
+  Undo2Icon,
+} from "lucide-react";
+import { createPortal } from "react-dom";
 
 import type { ComposerKeyboardAction } from "~/composer-keyboard";
 import { Button } from "../ui/button";
@@ -20,16 +27,17 @@ export function ComposerKeyboardBar({
   onAction: (action: ComposerKeyboardAction) => void;
   onHideKeyboard: () => void;
 }) {
-  return (
+  return createPortal(
     <div
       role="group"
       aria-label="Composer keyboard shortcuts"
       data-composer-keyboard-bar="true"
-      className="relative z-10 mx-2 flex min-w-0 items-center justify-between gap-1 overflow-x-auto border-t border-border/60 py-1 select-none touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      onPointerDown={(event) => event.preventDefault()}
+      className="fixed inset-x-3 bottom-[calc(var(--visual-viewport-bottom)+max(env(safe-area-inset-bottom),--spacing(3)))] z-50 mx-auto flex min-w-0 max-w-sm items-center justify-between overflow-x-auto rounded-xl border bg-popover px-1 py-1 shadow-lg select-none touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      // iOS still blurs on cancelled pointerdown; use mousedown (WebKit #322721).
+      onMouseDown={(event) => event.preventDefault()}
     >
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Insert $ for skills"
         disabled={disabled}
@@ -40,7 +48,7 @@ export function ComposerKeyboardBar({
         </span>
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Insert / for commands"
         disabled={disabled}
@@ -51,7 +59,7 @@ export function ComposerKeyboardBar({
         </span>
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Insert backtick"
         disabled={disabled}
@@ -62,7 +70,7 @@ export function ComposerKeyboardBar({
         </span>
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Move cursor left"
         disabled={disabled}
@@ -71,7 +79,7 @@ export function ComposerKeyboardBar({
         <ChevronLeftIcon />
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Move cursor right"
         disabled={disabled}
@@ -80,7 +88,7 @@ export function ComposerKeyboardBar({
         <ChevronRightIcon />
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Undo"
         disabled={disabled}
@@ -89,13 +97,23 @@ export function ComposerKeyboardBar({
         <Undo2Icon />
       </Button>
       <Button
-        variant="ghost-muted"
+        variant="ghost-muted-press"
+        size="icon-xl"
+        aria-label="Redo"
+        disabled={disabled}
+        onClick={() => onAction("redo")}
+      >
+        <Redo2Icon />
+      </Button>
+      <Button
+        variant="ghost-muted-press"
         size="icon-xl"
         aria-label="Hide keyboard"
         onClick={onHideKeyboard}
       >
         <KeyboardOffIcon />
       </Button>
-    </div>
+    </div>,
+    document.body,
   );
 }

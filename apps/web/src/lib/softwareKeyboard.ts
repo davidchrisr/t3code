@@ -3,7 +3,7 @@ type VirtualKeyboard = EventTarget & {
   readonly overlaysContent: boolean;
 };
 
-type KeyboardWindow = Pick<Window, "innerHeight" | "visualViewport"> & {
+type KeyboardWindow = Pick<Window, "document" | "visualViewport"> & {
   readonly navigator: Navigator & { readonly virtualKeyboard?: VirtualKeyboard };
 };
 
@@ -42,15 +42,15 @@ export function createSoftwareKeyboardStore(win: KeyboardWindow | undefined, isD
     const current = viewportSnapshot(viewport);
     // Adapted from Ionic's keyboard assist, MIT, Copyright (c) 2015-present Drifty Co.
     // https://github.com/ionic-team/ionic-framework/blob/main/core/src/utils/keyboard/keyboard.ts
-    const scaledHeightDifference = previous
-      ? (previous.height - current.height) * current.scale
-      : 0;
-    if (Math.abs(current.height - win.innerHeight / current.scale) <= 1) {
+    // iOS in-app browsers can shrink innerHeight to match the visible viewport.
+    const layoutHeight = win.document.documentElement.clientHeight;
+    const keyboardHeight = layoutHeight - current.height * current.scale;
+    if (Math.abs(current.height - layoutHeight / current.scale) <= 1) {
       viewportOpen = false;
     } else if (
       !viewportOpen &&
       previous?.width === current.width &&
-      scaledHeightDifference > KEYBOARD_THRESHOLD
+      keyboardHeight > KEYBOARD_THRESHOLD
     ) {
       viewportOpen = true;
     }
@@ -64,7 +64,9 @@ export function createSoftwareKeyboardStore(win: KeyboardWindow | undefined, isD
       if (viewport) {
         previous = viewportSnapshot(viewport);
         // A composer can mount after the keyboard has already opened.
-        viewportOpen = win.innerHeight - previous.height * previous.scale > KEYBOARD_THRESHOLD;
+        viewportOpen =
+          win.document.documentElement.clientHeight - previous.height * previous.scale >
+          KEYBOARD_THRESHOLD;
         viewport.addEventListener("resize", onViewportResize);
       }
       keyboard?.addEventListener("geometrychange", notify);

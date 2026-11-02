@@ -1,8 +1,8 @@
-import { undo } from "@tiptap/pm/history";
+import { redo, undo } from "@tiptap/pm/history";
 import { TextSelection, type EditorState } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 
-export type ComposerKeyboardAction = "$" | "/" | "`" | "left" | "right" | "undo";
+export type ComposerKeyboardAction = "$" | "/" | "`" | "left" | "right" | "undo" | "redo";
 
 export function composerKeyboardSelectionTransaction(
   state: EditorState,
@@ -18,8 +18,9 @@ export function runComposerKeyboardAction(view: EditorView, action: ComposerKeyb
   if (!view.editable || view.composing) return;
   view.focus();
 
-  if (action === "undo") {
-    undo(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
+  if (action === "undo" || action === "redo") {
+    const command = action === "undo" ? undo : redo;
+    command(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
     return;
   }
   if (action === "$" || action === "/" || action === "`") {

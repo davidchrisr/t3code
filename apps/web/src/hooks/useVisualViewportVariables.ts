@@ -19,7 +19,7 @@ export function useVisualViewportVariables(enabled: boolean) {
       style.setProperty(properties[1], `${viewport.offsetTop}px`);
       style.setProperty(
         properties[2],
-        `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`,
+        `${Math.max(0, document.documentElement.clientHeight - viewport.height - viewport.offsetTop)}px`,
       );
     };
     const schedule = () => {

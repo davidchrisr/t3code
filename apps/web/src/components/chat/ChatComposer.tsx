@@ -1,5 +1,6 @@
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { ComposerKeyboardBar, isComposerKeyboardFocusTarget } from "./ComposerKeyboardBar";
+import { CollapsedComposerPrompt } from "./CollapsedComposerPrompt";
 import type { ComposerKeyboardAction } from "~/composer-keyboard";
 import { ComposerVoiceButton, VoiceControls, useVoiceControls } from "./VoiceControls";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
@@ -76,7 +77,6 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
-  formatCollapsedComposerPrompt,
   isPathSuggestionCurrent,
   extendReplacementRangeForTrailingSpace,
   replaceTextRange,
@@ -3300,8 +3300,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onClick={expandMobileComposerStable}
                   aria-label="Expand composer"
                 >
-                  {formatCollapsedComposerPrompt(prompt).trim() ||
-                    (showProviderUnavailable ? "Enable a provider in Settings" : "Ask anything...")}
+                  {prompt.trim() ? (
+                    <CollapsedComposerPrompt prompt={prompt.trim()} />
+                  ) : showProviderUnavailable ? (
+                    "Enable a provider in Settings"
+                  ) : (
+                    "Ask anything..."
+                  )}
                 </button>
                 {collapsedComposerImagePreviews}
                 <button
