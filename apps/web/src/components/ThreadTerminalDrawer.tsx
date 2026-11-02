@@ -680,7 +680,10 @@ function TerminalSessionViewport({
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sets the terminal input's readOnly from the operate grant and consumes a pending focus request
   useLayoutEffect(() => {
-    if (terminalRef.current) terminalRef.current.input.readOnly = !canOperateTerminal;
+    if (terminalRef.current) {
+      terminalRef.current.input.readOnly = !canOperateTerminal;
+      if (terminalRef.current.hasTouchSelection()) terminalRef.current.clearSelection();
+    }
     if (canOperateTerminal && visibleRef.current)
       consumePendingTerminalFocus(threadRef, terminalId);
   }, [canOperateTerminal, terminalId, threadRef]);
@@ -950,7 +953,7 @@ function TerminalSessionViewport({
       };
 
       const showSelectionAction = async (pointer: SelectionActionPoint | null) => {
-        if (!localApi) {
+        if (!localApi || terminalRef.current?.hasTouchSelection()) {
           clearSelectionAction();
           return;
         }
