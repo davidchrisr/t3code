@@ -589,6 +589,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["composer rich text tiptap bold italic markdown styled wysiwyg"],
   },
   {
+    id: "saved-replies",
+    title: "Saved replies",
+    to: "/settings/chat",
+    environmentOnly: true,
+    scope: "environment-defaults",
+    searchTerms: ["template response phrase shortcut quick reply composer"],
+  },
+  {
     id: "send-shortcut",
     title: "Send shortcut",
     to: "/settings/chat",

@@ -5,6 +5,7 @@ import { type AppModelOption } from "../../modelSelection";
 import { CircleAlertIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
+import { ComposerSavedReplies } from "./ComposerSavedReplies";
 import {
   ComposerFooterModeControls,
   ComposerModelPicker,
@@ -19,7 +20,7 @@ import {
   type RuntimeMode,
   type ServerProvider,
 } from "@t3tools/contracts";
-import type { EffortDisplay } from "@t3tools/contracts/settings";
+import type { EffortDisplay, SavedReply } from "@t3tools/contracts/settings";
 import { cn } from "~/lib/utils";
 import { resolveComposerTraitsInput } from "./composerProviderState";
 import {
@@ -71,6 +72,9 @@ export function ComposerControlsBar(props: {
   onOpenProviderSetup: ChatComposerProps["onOpenProviderSetup"];
   providerCatalogPending: boolean;
   isSendBusy: boolean;
+  savedReplies: ReadonlyArray<SavedReply>;
+  savedRepliesDisabled: boolean;
+  onSendSavedReply: (text: string) => void;
   multipleModelsEnabled: boolean;
   multipleModelSelections: ChatComposerProps["multipleModelSelections"];
   onMultipleModelSelectionsChange: ChatComposerProps["onMultipleModelSelectionsChange"];
@@ -268,6 +272,13 @@ export function ComposerControlsBar(props: {
     </ComposerControl>
   ) : (
     <>
+      <ComposerSavedReplies
+        replies={props.savedReplies}
+        disabled={props.savedRepliesDisabled}
+        hidden={composerControlsHidden}
+        size={controlSize}
+        onSend={props.onSendSavedReply}
+      />
       {composerModelPicker}
 
       <>

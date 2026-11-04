@@ -481,6 +481,7 @@ export interface ChatComposerProps {
     dispatchMode?: ComposerDispatchMode,
     submissionIntent?: ComposerSubmissionIntent,
   ) => void;
+  onSendSavedReply: (text: string, dispatchMode: ComposerDispatchMode) => void;
   onResume: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
@@ -592,6 +593,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onPageScrollRelease,
     onCompactContext,
     onSend,
+    onSendSavedReply,
     onResume,
     onInterrupt,
     onImplementPlanInNewThread,
@@ -959,6 +961,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         runtimeModeCeilingDenial ??
         (multipleModelSelections === null ? providerSendBlockReason : null)));
   const isSendDisabled = sendDisabledReason !== null;
+  const savedReplySendDisabled =
+    externalSendDisabledReason !== null ||
+    runtimeModeCeilingDenial !== undefined ||
+    multipleModelSelections?.length === 0 ||
+    (multipleModelSelections === null && providerSendBlockReason !== null);
   const selectedProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const compactCommandAvailable = providerSupportsManualCompaction(selectedProviderEntry);
   const selectedProviderSkills = selectedProviderStatus
@@ -2145,6 +2152,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   };
 
+  const canSubmitPreparedAttachments = (event?: { preventDefault: () => void }) => {
+    // A send while a pasted image is still compressing would strand that image:
+    // the turn snapshot wouldn't include it, and it would surface in the *next*
+    // draft instead.
+    if (activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0) {
+      event?.preventDefault();
+      toastManager.add({
+        type: "info",
+        title: "Still compressing a pasted image.",
+        description: "Send again once its thumbnail appears.",
+      });
+      return false;
+    }
+    if (pendingDraftWork.has(attachmentTargetKey)) {
+      event?.preventDefault();
+      toastManager.add({
+        type: "info",
+        title: "Still bringing attached context into this message.",
+        description: "Send again once its chip resolves.",
+      });
+      return false;
+    }
+    return true;
+  };
+
   const submitComposer = (
     event?: { preventDefault: () => void },
     dispatchMode?: ComposerDispatchMode,
@@ -2158,27 +2190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event?.preventDefault();
       return;
     }
-    // A send while a pasted image is still compressing would strand that image:
-    // the turn snapshot wouldn't include it, and it would surface in the *next*
-    // draft instead.
-    if (activeThreadId && countPreparingComposerImages(attachmentTargetKey) > 0) {
-      event?.preventDefault();
-      toastManager.add({
-        type: "info",
-        title: "Still compressing a pasted image.",
-        description: "Send again once its thumbnail appears.",
-      });
-      return;
-    }
-    if (pendingDraftWork.has(attachmentTargetKey)) {
-      event?.preventDefault();
-      toastManager.add({
-        type: "info",
-        title: "Still bringing attached context into this message.",
-        description: "Send again once its chip resolves.",
-      });
-      return;
-    }
+    if (!canSubmitPreparedAttachments(event)) return;
     const submission = submitComposerDraft({
       prompt: promptRef.current,
       submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
@@ -2207,6 +2219,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
   };
   const submitComposerStable = useStableCallback(submitComposer);
+  const sendSavedReply = (text: string) => {
+    if (
+      noProviderAvailable ||
+      savedReplySendDisabled ||
+      isSendBusy ||
+      environmentUnavailable !== null ||
+      projectSelectionRequired ||
+      pendingUserInputs.length > 0 ||
+      isEditingQueuedMessage ||
+      !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+    )
+      return;
+    if (!canSubmitPreparedAttachments()) return;
+    const submission = submitComposerDraft({
+      prompt: text,
+      submissionTarget: "provider-turn",
+      event: undefined,
+      onSend: () => {
+        providerInputRejectedRef.current = false;
+        onSendSavedReply(
+          text,
+          resolveComposerDispatchMode({
+            running: phase === "running",
+            alternateModifier: false,
+            activeTurnDefault: followUpBehavior,
+            canSteer: !isCompacting,
+          }),
+        );
+        return !providerInputRejectedRef.current;
+      },
+    });
+    setComposerSubmissionError(submission.validationMessage);
+  };
+  const sendSavedReplyStable = useStableCallback(sendSavedReply);
   const handleSubmitMessage = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     submitComposer(
@@ -2426,6 +2472,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onOpenProviderSetup={onOpenProviderSetup}
       providerCatalogPending={providerCatalogPending}
       isSendBusy={isSendBusy}
+      savedReplies={settings.savedReplies}
+      savedRepliesDisabled={
+        !canOperateThread ||
+        savedReplySendDisabled ||
+        isSendBusy ||
+        environmentUnavailable !== null ||
+        projectSelectionRequired ||
+        pendingUserInputs.length > 0 ||
+        isEditingQueuedMessage
+      }
+      onSendSavedReply={sendSavedReplyStable}
       multipleModelsEnabled={routeKind === "draft" && supportsMultipleModels}
       multipleModelSelections={multipleModelSelections}
       onMultipleModelSelectionsChange={setMultipleModelSelections}

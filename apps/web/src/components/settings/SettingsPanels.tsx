@@ -62,6 +62,7 @@ import { scopedIdleCompaction } from "./scopedSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { ThreadTitleInstructionsSettings } from "./ThreadTitleInstructionsSettings";
 import { SnoozePresetsRow } from "./SnoozePresetsSettings";
+import { SavedRepliesSettings } from "./SavedRepliesSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { managedTelemetryOffMessage, usePrimaryManagedPolicy } from "../../state/managedPolicy";
 import {
@@ -1091,6 +1092,7 @@ export function GeneralSettingsPanel() {
 }
 
 export function ChatSettingsPanel() {
+  const { scope } = useSettingsScope();
   const defaultSendShortcut = getDefaultClientSettings().sendShortcut;
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const sendShortcutOptions = [
@@ -1201,6 +1203,7 @@ export function ChatSettingsPanel() {
         ))}
       </SettingsSection>
       <SettingsSection id="composer" title="Composer">
+        <SavedRepliesSettings key={JSON.stringify(scope)} />
         <SettingsRow
           {...searchableSetting("composer-rich-text")}
           description="Show formatted Markdown as you type."

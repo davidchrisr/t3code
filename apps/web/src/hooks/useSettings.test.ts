@@ -304,23 +304,32 @@ describe("persistClientSettingsUpdate", () => {
 });
 
 describe("mergeEnvironmentSettings", () => {
-  it("keeps server settlement settings when legacy client data contains retired keys", () => {
-    const serverSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      sidebarAutoSettleAfterDays: 14,
-      sidebarAutoSettleOnMerge: false,
-    };
-    const legacyClientSettings = {
-      ...DEFAULT_CLIENT_SETTINGS,
-      sidebarAutoSettleAfterDays: 1,
-      sidebarAutoSettleOnMerge: true,
-    };
+  it.each([
+    { savedReplies: [] },
+    { savedReplies: [{ id: "shared", name: "Shared", text: "From the server" }] },
+  ])(
+    "keeps server settings when legacy client data contains retired keys, saved replies $savedReplies",
+    ({ savedReplies }) => {
+      const serverSettings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        sidebarAutoSettleAfterDays: 14,
+        sidebarAutoSettleOnMerge: false,
+        savedReplies,
+      };
+      const legacyClientSettings = {
+        ...DEFAULT_CLIENT_SETTINGS,
+        sidebarAutoSettleAfterDays: 1,
+        sidebarAutoSettleOnMerge: true,
+        savedReplies: [{ id: "local", name: "Local", text: "From the old client" }],
+      };
 
-    const settings = mergeEnvironmentSettings(serverSettings, legacyClientSettings);
+      const settings = mergeEnvironmentSettings(serverSettings, legacyClientSettings);
 
-    expect(settings.sidebarAutoSettleAfterDays).toBe(14);
-    expect(settings.sidebarAutoSettleOnMerge).toBe(false);
-  });
+      expect(settings.sidebarAutoSettleAfterDays).toBe(14);
+      expect(settings.sidebarAutoSettleOnMerge).toBe(false);
+      expect(settings.savedReplies).toEqual(savedReplies);
+    },
+  );
 });
 
 describe("onboarding completion persistence", () => {
