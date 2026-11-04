@@ -134,6 +134,41 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepEqual(settings.providerModelPreferences?.[provider]?.modelOrder, ["luna", "sol"]);
     }).pipe(Effect.provide(layerServerSettings())),
   );
+  it.effect("persists saved replies and broadcasts updates and deletion to connected clients", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const savedReplies = [
+          { id: "proceed", name: "Proceed", text: "Go ahead.\nRun the tests." },
+        ];
+        const patch = yield* decodeServerSettingsPatch({ savedReplies });
+        const firstClient = yield* service.subscribeChanges;
+        const secondClient = yield* service.subscribeChanges;
+        const updated = yield* service.updateSettings(patch);
+        assert.deepEqual(updated.savedReplies, savedReplies);
+        for (const changes of [firstClient, secondClient]) {
+          const received = Option.getOrThrow(yield* Stream.runHead(changes));
+          assert.deepEqual(received.savedReplies, savedReplies);
+        }
+        const stored = yield* decodeServerSettingsJson(
+          yield* fs.readFileString(config.settingsPath),
+        );
+        assert.deepEqual(stored.savedReplies, savedReplies);
+
+        const deletion = yield* service.subscribeChanges;
+        yield* service.updateSettings(yield* decodeServerSettingsPatch({ savedReplies: [] }));
+        assert.deepEqual(Option.getOrThrow(yield* Stream.runHead(deletion)).savedReplies, []);
+        assert.deepEqual((yield* service.getSettings).savedReplies, []);
+        assert.deepEqual(
+          (yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath)))
+            .savedReplies,
+          [],
+        );
+      }),
+    ).pipe(Effect.provide(layerServerSettings())),
+  );
   it.effect("persists and broadcasts model preferences to other connected clients", () =>
     Effect.scoped(
       Effect.gen(function* () {

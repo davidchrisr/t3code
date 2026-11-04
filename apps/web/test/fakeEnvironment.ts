@@ -18,6 +18,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   type VcsStatusStreamEvent,
+  type ServerSettings,
   type OrchestrationProjectShell,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2Run,
@@ -67,7 +68,7 @@ const auth = {
   sessionCookieName: "t3_session",
 };
 
-const serverConfig: ServerConfig = {
+const defaultServerConfig: ServerConfig = {
   ...Schema.decodeUnknownSync(ServerConfig)({
     environment: descriptor,
     auth,
@@ -102,6 +103,7 @@ const serverConfig: ServerConfig = {
   }),
   keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
 };
+let serverConfig = defaultServerConfig;
 
 const project: OrchestrationProjectShell = {
   id: PROJECT_ID,
@@ -397,7 +399,7 @@ const client = new Proxy(handlers, {
 
 const session: EnvironmentConnectionLease["session"] = {
   client: client as unknown as WsRpcProtocolClient,
-  initialConfig: Effect.succeed(serverConfig),
+  initialConfig: Effect.sync(() => serverConfig),
   subscribeServerConfig: () =>
     subscribe([{ version: 1 as const, type: "snapshot" as const, config: serverConfig }]),
   ready: Effect.void,
@@ -433,8 +435,15 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 );
 
 /** Serves the environment's HTTP API and these threads until disposed. */
-export function installFakeEnvironment(fixtures: ReadonlyArray<FakeThread>): Disposable {
+export function installFakeEnvironment(
+  fixtures: ReadonlyArray<FakeThread>,
+  settings: Partial<ServerSettings> = {},
+): Disposable {
   threads = fixtures;
+  serverConfig = {
+    ...defaultServerConfig,
+    settings: { ...defaultServerConfig.settings, ...settings },
+  };
   globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
     if (url.origin !== window.location.origin) return realFetch(input, init);
@@ -456,6 +465,7 @@ export function installFakeEnvironment(fixtures: ReadonlyArray<FakeThread>): Dis
     [Symbol.dispose]: () => {
       globalThis.fetch = realFetch;
       threads = [];
+      serverConfig = defaultServerConfig;
     },
   };
 }

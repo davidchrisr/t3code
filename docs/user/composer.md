@@ -35,6 +35,15 @@ at the end, leave the block. **Backspace** at the start of a code block turns it
 back into plain lines. Choose the language in a code block's corner to change
 it. Very large code blocks are shown without syntax highlighting.
 
+## Saved replies
+
+On web and desktop, add named responses under **Settings → Chat → Saved
+replies**. Choose a response from **Saved replies** in the composer to send it
+immediately. Your current draft and its attachments stay in the composer. While
+the agent is working, replies use your configured Queue or Steer behavior.
+Replies are saved on the server and shared with its connected clients. Editing
+them requires permission to change that server's settings.
+
 ## Attach files
 
 Attach up to 100 files per message. Each image can be up to 10 MiB, with at most

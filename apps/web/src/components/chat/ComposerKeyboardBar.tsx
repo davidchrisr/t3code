@@ -5,7 +5,6 @@ import {
   Redo2Icon,
   Undo2Icon,
 } from "lucide-react";
-import { createPortal } from "react-dom";
 
 import type { ComposerKeyboardAction } from "~/composer-keyboard";
 import { Button } from "../ui/button";
@@ -27,12 +26,12 @@ export function ComposerKeyboardBar({
   onAction: (action: ComposerKeyboardAction) => void;
   onHideKeyboard: () => void;
 }) {
-  return createPortal(
+  return (
     <div
       role="group"
       aria-label="Composer keyboard shortcuts"
       data-composer-keyboard-bar="true"
-      className="fixed inset-x-3 bottom-[calc(var(--visual-viewport-bottom)+max(env(safe-area-inset-bottom),--spacing(3)))] z-50 mx-auto flex min-w-0 max-w-sm items-center justify-between overflow-x-auto rounded-xl border bg-popover px-1 py-1 shadow-lg select-none touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="relative flex w-full min-w-0 items-center justify-between overflow-x-auto rounded-b-2xl border-t border-(--chat-composer-outline) px-1 py-1 select-none touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       // iOS still blurs on cancelled pointerdown; use mousedown (WebKit #322721).
       onMouseDown={(event) => event.preventDefault()}
     >
@@ -113,7 +112,6 @@ export function ComposerKeyboardBar({
       >
         <KeyboardOffIcon />
       </Button>
-    </div>,
-    document.body,
+    </div>
   );
 }

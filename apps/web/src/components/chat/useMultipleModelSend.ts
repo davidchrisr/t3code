@@ -96,6 +96,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readFileBlockReason,
     buildOutgoingMessageContext,
     isCurrentSend,
+    preserveDraft = false,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -112,6 +113,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     ) => ReturnType<typeof buildMessageContext>;
     /** False once a newer send from this composer started. */
     readonly isCurrentSend: () => boolean;
+    readonly preserveDraft?: boolean;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -132,15 +134,18 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
         text: messageText,
         attachments: attachmentsSnapshot,
       });
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-      clearedDraft = true;
+      if (!preserveDraft) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+        clearedDraft = true;
+      }
       const clearedDraftSnapshot = useComposerDraftStore
         .getState()
         .getComposerDraft(composerDraftTarget);
       const submittedSelections = appAtomRegistry.get(fanoutSelectionsAtom);
       canRestoreDraft = () =>
+        !preserveDraft &&
         currentRouteThreadKeyRef.current === routeThreadKey &&
         isCurrentSend() &&
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) ===

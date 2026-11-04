@@ -411,13 +411,17 @@ export function useComposerSend(input: ComposerSendInput) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    savedReplyText?: string,
   ) => {
     e?.preventDefault();
+    const isSavedReply = savedReplyText !== undefined;
+    if (isSavedReply && (activePendingProgress || queuedRunEdit.isEditing)) return;
     // What the user pressed send on; uploads below can take a while, and a redirect must not
     // decline approvals for a draft that changed meanwhile.
-    const promptAtSend = promptRef.current;
+    const promptAtSend = savedReplyText ?? promptRef.current;
     if (
       !directAnnotation &&
+      !isSavedReply &&
       !queuedRunEdit.isEditing &&
       !activePendingProgress &&
       isVoiceCommand(promptAtSend)
@@ -441,6 +445,7 @@ export function useComposerSend(input: ComposerSendInput) {
       usageLimitsOffered &&
       usageLimitsKey !== null &&
       !directAnnotation &&
+      !isSavedReply &&
       !draftHasNonPromptContent(composerDraftTarget) &&
       isUsageLimitsCommand(promptRef.current)
     ) {
@@ -504,10 +509,24 @@ export function useComposerSend(input: ComposerSendInput) {
       });
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
+    const liveSendCtx = composerRef.current?.getSendContext();
+    const sendCtx =
+      liveSendCtx && isSavedReply
+        ? {
+            ...liveSendCtx,
+            prompt: savedReplyText,
+            images: [],
+            files: [],
+            terminalContexts: [],
+            previewAnnotations: [],
+            reviewComments: [],
+            threadContexts: [],
+            environmentContexts: [],
+          }
+        : liveSendCtx;
     // `/side` beats an open question and a plan follow-up, which would send the text to main.
     const sideChatCommand =
-      sendCtx && !directAnnotation && !queuedRunEdit.isEditing
+      sendCtx && !directAnnotation && !isSavedReply && !queuedRunEdit.isEditing
         ? parseSideChatCommand(promptAtSend)
         : null;
     const answeringQuestion =
@@ -628,7 +647,7 @@ export function useComposerSend(input: ComposerSendInput) {
       ? ensureInlineContextReferences(promptRef.current, [
           previewAnnotationContextReference(directAnnotation.annotation),
         ])
-      : promptRef.current;
+      : promptAtSend;
     const strandedThread = threadContextsOutsideEnvironment({
       text: promptForSend,
       records: composerThreadContexts,
@@ -682,6 +701,7 @@ export function useComposerSend(input: ComposerSendInput) {
         composerEnvironmentContexts.length,
     });
     const feedbackCommand =
+      !isSavedReply &&
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
@@ -740,6 +760,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
     if (
       !directAnnotation &&
+      !isSavedReply &&
       sendInteractionModeEnabled &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
@@ -820,6 +841,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const standaloneSlashCommand =
+      !isSavedReply &&
       sendInteractionModeEnabled &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
@@ -1073,6 +1095,7 @@ export function useComposerSend(input: ComposerSendInput) {
       const sameIds = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
         left.length === right.length && left.every((id, index) => id === right[index]);
       const draftChangedSinceSend = () => {
+        if (isSavedReply) return false;
         if (composerRef.current?.hasPendingAttachments() === true) return true;
         const sendContext = composerRef.current?.getSendContext();
         const attachmentIds = sendContext
@@ -1121,6 +1144,7 @@ export function useComposerSend(input: ComposerSendInput) {
         sendInFlightRef.current = false;
         if (
           sent &&
+          !isSavedReply &&
           !draftChangedSinceSend() &&
           currentRouteThreadKeyRef.current === routeThreadKey &&
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) ===
@@ -1141,8 +1165,9 @@ export function useComposerSend(input: ComposerSendInput) {
       const draftChanged =
         changedBeforeDecline ||
         draftChangedSinceSend() ||
-        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
-          draftBeforeDecline;
+        (!isSavedReply &&
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
+            draftBeforeDecline);
       // An approval that arrived during the decline would block the redirect; keep the draft so
       // the next send declines it too.
       const approvalArrived = pendingApprovalsRef.current.some(
@@ -1210,6 +1235,7 @@ export function useComposerSend(input: ComposerSendInput) {
         readFileBlockReason: () => readLiveAttachmentCapabilities().fileBlockReason,
         buildOutgoingMessageContext,
         isCurrentSend: () => composerSendGenerationRef.current === sendGeneration,
+        preserveDraft: isSavedReply,
       });
       return;
     }
@@ -1263,9 +1289,11 @@ export function useComposerSend(input: ComposerSendInput) {
       : null;
     // Keep new-thread flows from reusing this draft while attachments and worktree setup settle.
     if (sentDraftThreadRef) markPromotedDraftThreadByRef(sentDraftThreadRef);
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    if (!isSavedReply) {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    }
 
     const title = deriveThreadTitleSeed({
       text: messageTextForSend,
@@ -1473,6 +1501,7 @@ export function useComposerSend(input: ComposerSendInput) {
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
       if (
+        isSavedReply ||
         !composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
@@ -1483,8 +1512,10 @@ export function useComposerSend(input: ComposerSendInput) {
         });
         // The restored draft clones its images, so the sent copies are no longer used.
         optimisticBlobPreviews.release(optimisticMessage);
-        const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
-        if (currentRouteThreadKeyRef.current === routeThreadKey) {
+        const retryComposerImages = isSavedReply
+          ? []
+          : restoreComposerDraft(composerDraftTarget, sendSnapshot);
+        if (!isSavedReply && currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
           composerImagesRef.current = retryComposerImages;
           composerFilesRef.current = composerFilesSnapshot;
@@ -1535,5 +1566,8 @@ export function useComposerSend(input: ComposerSendInput) {
     }
   };
 
-  return { onSend };
+  const onSendSavedReply = (text: string, dispatchMode: ComposerDispatchMode) =>
+    onSend(undefined, dispatchMode, "foreground", undefined, text);
+
+  return { onSend, onSendSavedReply };
 }

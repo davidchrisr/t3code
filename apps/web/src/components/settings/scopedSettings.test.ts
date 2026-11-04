@@ -311,10 +311,12 @@ describe("scoped settings writes", () => {
   it("persists client keys locally at any scope alongside server keys", async () => {
     const persistServer = vi.fn().mockResolvedValue({ _tag: "Success" });
     const persistClient = vi.fn();
+    const savedReplies = [{ id: "proceed", name: "Proceed", text: "Go ahead." }];
     await persistScopedSettingsPatch(
       planScopedSettingsPatch(named, environments, {
         diffIgnoreWhitespace: false,
         enableProviderUpdateChecks: false,
+        savedReplies,
       }),
       persistServer,
       persistClient,
@@ -322,7 +324,7 @@ describe("scoped settings writes", () => {
     expect(persistClient).toHaveBeenCalledExactlyOnceWith({ diffIgnoreWhitespace: false });
     expect(persistServer).toHaveBeenCalledExactlyOnceWith({
       environmentId: server.environmentId,
-      input: { patch: { enableProviderUpdateChecks: false } },
+      input: { patch: { enableProviderUpdateChecks: false, savedReplies } },
     });
   });
 

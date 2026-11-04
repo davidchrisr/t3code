@@ -10,12 +10,14 @@ import {
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
+  MAX_SAVED_REPLIES,
   ClaudeSettings,
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   globalIdleCompaction,
   idleCompactionPatch,
   requiredScopesForProjectMutation,
+  requiredScopesForServerSettingsPatch,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
@@ -348,6 +350,40 @@ describe("ClientSettings chat expansion", () => {
       expect(decodeClientSettings({ commandExpansion }).commandExpansion).toBe(commandExpansion);
       expect(decodeClientSettingsPatch({ commandExpansion })).toMatchObject({ commandExpansion });
     }
+  });
+});
+
+describe("ServerSettings saved replies", () => {
+  const reply = { id: "proceed", name: "Proceed", text: "Go ahead.\n\nKeep the existing tests." };
+
+  it("defaults existing installations to no replies and round-trips multiline text", () => {
+    expect(decodeServerSettings({}).savedReplies).toEqual([]);
+    expect(decodeServerSettingsPatch({})).not.toHaveProperty("savedReplies");
+    const savedReplies = [reply];
+    const settings = decodeServerSettings({ savedReplies });
+    expect(decodeServerSettings(encodeServerSettings(settings)).savedReplies).toEqual(savedReplies);
+    expect(decodeServerSettingsPatch({ savedReplies })).toEqual({ savedReplies });
+    expect(decodeServerSettingsPatch({ savedReplies: [] })).toEqual({ savedReplies: [] });
+    expect(decodeClientSettings({ savedReplies })).not.toHaveProperty("savedReplies");
+    expect(decodeClientSettingsPatch({ savedReplies })).not.toHaveProperty("savedReplies");
+    expect(requiredScopesForServerSettingsPatch({ savedReplies })).toEqual(["settings:write"]);
+  });
+
+  it.each([
+    { savedReplies: [{ ...reply, id: "" }] },
+    { savedReplies: [{ ...reply, name: " " }] },
+    { savedReplies: [{ ...reply, name: "n".repeat(101) }] },
+    { savedReplies: [{ ...reply, text: " \n " }] },
+    { savedReplies: [{ ...reply, text: "x".repeat(120_001) }] },
+    {
+      savedReplies: Array.from({ length: MAX_SAVED_REPLIES + 1 }, (_, index) => ({
+        ...reply,
+        id: String(index),
+      })),
+    },
+  ])("rejects invalid saved replies %#", ({ savedReplies }) => {
+    expect(() => decodeServerSettings({ savedReplies })).toThrow();
+    expect(() => decodeServerSettingsPatch({ savedReplies })).toThrow();
   });
 });
 
