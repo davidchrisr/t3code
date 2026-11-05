@@ -46,6 +46,8 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
     readonly isVisible: (key: DesktopTabKey) => boolean;
     readonly visibilityChanged: Stream.Stream<DesktopTabKey>;
+    /** Whether a desktop window draws the tab on screen, which no streamed viewer counts. */
+    readonly isShown: (key: DesktopTabKey) => boolean;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
@@ -64,6 +66,8 @@ const make = Effect.gen(function* () {
   const attachedTabs = new Set<string>();
   const visibleTabs = new Set<string>();
   const visibilityChanged = yield* PubSub.unbounded<DesktopTabKey>();
+  // Missing reports protect desktop tabs until the renderer explicitly marks them hidden.
+  const shownTabs = new Map<string, boolean>();
   const inbound = new Map<string, Queue.Queue<string>>();
   const writeLock = yield* Semaphore.make(1);
 
@@ -89,6 +93,7 @@ const make = Effect.gen(function* () {
       }),
       isVisible: () => false,
       visibilityChanged: Stream.empty,
+      isShown: () => false,
     });
   }
 
@@ -136,14 +141,19 @@ const make = Effect.gen(function* () {
         case "detached": {
           attachedTabs.delete(id);
           visibleTabs.delete(id);
+          shownTabs.delete(id);
           const queue = inbound.get(id);
           return (queue ? Queue.shutdown(queue) : Effect.void).pipe(
             Effect.andThen(PubSub.publish(changes, { key, attached: false })),
           );
         }
+        case "shown":
+          shownTabs.set(id, event.shown);
+          return Effect.void;
       }
     }),
     Effect.catchCause((cause) => Effect.logWarning("desktop browser channel stopped", { cause })),
+    Effect.ensuring(Effect.sync(() => shownTabs.clear())),
     Effect.forkScoped,
   );
 
@@ -236,6 +246,7 @@ const make = Effect.gen(function* () {
     }),
     isVisible: (key) => visibleTabs.has(keyOf(key)),
     visibilityChanged: Stream.fromPubSub(visibilityChanged),
+    isShown: (key) => shownTabs.get(keyOf(key)) ?? true,
     endpoint,
     turn: Effect.fn("DesktopBrowserChannel.turn")(function (threadId, active) {
       return command({ type: "turn", threadId, active });

@@ -12,8 +12,18 @@ import {
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import type { DesktopPreviewPresentationInput } from "@t3tools/contracts";
 import { PASSKEY_BRIDGE_ARGUMENT } from "./GuestProtocol.ts";
+
+class NativeBrowserInitializationError extends Schema.TaggedError<NativeBrowserInitializationError>()(
+  "NativeBrowserInitializationError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "The native browser view could not initialize.";
+  }
+}
 
 const dialogParents = new WeakMap<WebContents, BrowserWindow>();
 export const nativeBrowserDialogParent = (contents: WebContents): BrowserWindow | undefined =>
@@ -253,7 +263,12 @@ export const createNativeBrowserView = async (options: {
       bindWindow();
       await setRenderingActive("initialization", false);
     };
-    await Effect.runPromise(Effect.tryPromise(startup).pipe(Effect.timeout("10 seconds")));
+    await Effect.runPromise(
+      Effect.tryPromise({
+        try: startup,
+        catch: (cause) => new NativeBrowserInitializationError({ cause }),
+      }).pipe(Effect.timeout("10 seconds")),
+    );
     initialized = true;
   } catch (error) {
     await close();

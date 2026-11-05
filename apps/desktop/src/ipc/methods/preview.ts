@@ -10,6 +10,7 @@ import {
   DesktopPreviewPresentationInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
+  DesktopPreviewSetShownInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
@@ -225,6 +226,15 @@ const setAudioMuted = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setAudioMuted")(function* ({ tabId, audioMuted }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setAudioMuted(tabId, audioMuted);
+  }),
+});
+const setShown = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_SHOWN_CHANNEL,
+  payload: DesktopPreviewSetShownInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setShown(tabId, shown);
   }),
 });
 const openDevTools = tabMethod(
@@ -467,6 +477,7 @@ export const methods = [
   setColorScheme,
   setZoomFactor,
   setAudioMuted,
+  setShown,
   openDevTools,
   clearCookies,
   clearCache,

@@ -767,13 +767,15 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
     captureStage: Schema.optional(Schema.Literals(["capture-queue", "screenshot", "snapshot"])),
+    reason: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
+    const detail = this.reason === undefined ? summary : `${summary} ${this.reason}`;
     return this.captureStage
-      ? `${summary} Capture stage: ${this.captureStage}. Check preview_status. Reopen the stuck tab once with the same URL and profile; if capture still fails, stop and report it.`
-      : summary;
+      ? `${detail} Capture stage: ${this.captureStage}. Check preview_status. Reopen the stuck tab once with the same URL and profile; if capture still fails, stop and report it.`
+      : detail;
   }
 }
 
@@ -843,7 +845,11 @@ export class PreviewAutomationInvalidSelectorError extends Schema.TaggedError<Pr
     if (this.staleRef)
       return "This element ref is stale. Navigation, dialogs, and new snapshots replace refs; take a fresh snapshot and use its refs.";
     if (this.selectorKind !== undefined && this.selectorLength !== undefined) {
-      return `Preview automation ${this.operation} received an invalid ${this.selectorKind} (${this.selectorLength} characters).`;
+      const guidance =
+        this.selectorKind === "locator"
+          ? "Use aria-ref=<ref> from the latest snapshot or a Playwright role/text selector; put CSS in selector."
+          : "selector takes CSS; use locator for aria-ref=<ref>, role, or text targets.";
+      return `Preview automation ${this.operation} received an invalid ${this.selectorKind} (${this.selectorLength} characters). ${guidance}`;
     }
     return `Preview automation ${this.operation} received an invalid selector.`;
   }

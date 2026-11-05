@@ -155,6 +155,9 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
 
   const [webviewGeneration, setWebviewGeneration] = useState(0);
   const [recoverySrc, setRecoverySrc] = useState(initialSrc);
+  const active = presentation.visible && presentation.rect !== null;
+  const shown = active || pictureInPicture;
+  const reportedShown = useEffectEvent(() => serverDriven && shown);
   const remountCrashedWebview = useEffectEvent(() => {
     setRecoverySrc(initialUrl ?? initialSrc);
     setWebviewGeneration((generation) => generation + 1);
@@ -183,6 +186,7 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
             if (!disposed) await reportPresentation();
+            withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, reportedShown()));
           }
         } catch {}
       })();
@@ -224,7 +228,6 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
     webviewGeneration,
   ]);
 
-  const active = presentation.visible && presentation.rect !== null;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Synchronizes rendered visibility and document visibility with the desktop host.
   useEffect(() => {
     const updatePresentation = previewBridge?.updatePresentation;
@@ -357,6 +360,13 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
       captureReady: { requestId: captureRequestId, webContentsId },
     });
   }, [captureRequestId, renderingActive, runtimeTabId, active, pictureInPicture]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Report the mounted webview's visibility to the desktop host.
+  useEffect(() => {
+    const bridge = window.desktopBridge?.preview;
+    if (!clientSettingsHydrated || !bridge || !serverDriven) return;
+    withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, shown));
+    return () => withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, false));
+  }, [clientSettingsHydrated, runtimeTabId, serverDriven, shown]);
 
   if (!clientSettingsHydrated || !config) return null;
 

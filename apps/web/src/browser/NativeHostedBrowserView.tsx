@@ -203,6 +203,14 @@ export function NativeHostedBrowserView(props: HostedBrowserViewProps) {
     initialSize,
   ]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reports the native panel or PiP to desktop idle-tab protection
+  useEffect(() => {
+    const bridge = previewBridge;
+    if (!hydrated || !bridge || !serverDriven) return;
+    withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, active || pictureInPicture));
+    return () => withDesktopTab(runtimeTabId, () => bridge.setShown(runtimeTabId, false));
+  }, [hydrated, runtimeTabId, serverDriven, active, pictureInPicture]);
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- guest focus crosses Electron views, so replay it for host popup dismissal
   useEffect(
     () =>
