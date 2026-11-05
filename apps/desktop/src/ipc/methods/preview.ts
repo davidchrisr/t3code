@@ -79,8 +79,26 @@ const createTab = DesktopIpc.makeIpcMethod({
     zoomFactor,
     colorScheme,
     serverTab,
+    nativeView,
   }) {
     const manager = yield* PreviewManager.PreviewManager;
+    if (nativeView) {
+      const { scope, persistent, namespace } = resolvePartitionScope(
+        nativeView.environmentId,
+        nativeView.profileId,
+      );
+      const session = yield* manager.getBrowserSession(scope, persistent, namespace);
+      const partition = yield* manager.getBrowserPartition(scope, persistent, namespace);
+      yield* manager.createNativeTab(tabId, {
+        session,
+        partition,
+        width: nativeView.width,
+        height: nativeView.height,
+        ...(nativeView.initialUrl === undefined ? {} : { initialUrl: nativeView.initialUrl }),
+        defaults: { zoomFactor, colorScheme, serverTab },
+      });
+      return;
+    }
     yield* manager.createTab(tabId, { zoomFactor, colorScheme, serverTab });
   }),
 });
@@ -111,6 +129,10 @@ const updatePresentation = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.preview.updatePresentation")(function* (input, event) {
     const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+    if (input.nativeView) {
+      const manager = yield* PreviewManager.PreviewManager;
+      yield* manager.updateNativePresentation(input, event?.sender.id);
+    }
     host.updatePresentation(input, event?.sender.id);
   }),
 });

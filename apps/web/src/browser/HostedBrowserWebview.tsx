@@ -25,6 +25,7 @@ import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewS
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserLayoutZoomFactor } from "./useBrowserLayoutZoomFactor";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
+import { NativeHostedBrowserView } from "./NativeHostedBrowserView";
 import {
   INITIAL_WEBVIEW_CRASH_RECOVERY_STATE,
   planWebviewCrashRecovery,
@@ -46,7 +47,7 @@ declare global {
   }
 }
 
-export function HostedBrowserWebview(props: {
+export interface HostedBrowserViewProps {
   readonly threadRef: ScopedThreadRef;
   readonly tabId: string;
   readonly runtimeTabId: string;
@@ -61,7 +62,17 @@ export function HostedBrowserWebview(props: {
     readonly colorScheme: DesktopPreviewColorScheme;
     readonly zoomFactor: number;
   };
-}) {
+}
+
+export function HostedBrowserWebview(props: HostedBrowserViewProps) {
+  return isMacPlatform(navigator.platform) && props.serverDriven ? (
+    <NativeHostedBrowserView {...props} />
+  ) : (
+    <LegacyHostedBrowserWebview {...props} />
+  );
+}
+
+function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
   const {
     threadRef,
     tabId,

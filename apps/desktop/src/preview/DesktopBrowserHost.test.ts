@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Stands in for an Electron debugger.
 import { describe, expect, it, vi } from "@effect/vitest";
 import { DesktopBrowserEvent } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -180,6 +181,50 @@ const makeHost = () =>
   });
 
 describe("DesktopBrowserHost", () => {
+  it.effect.each([false, true])(
+    "prepares the native parent before capturing, refusal: %s",
+    (refuse) =>
+      Effect.gen(function* () {
+        const host = yield* DesktopBrowserHost.make;
+        const debuggee = makeDebuggee();
+        const started = yield* Deferred.make<void>();
+        const ready = Promise.withResolvers<void>();
+        const protocol: boolean[] = [];
+        host.attach(key, {
+          ...debuggee.tab,
+          nativeView: {
+            rendererId: () => 42,
+            applicationHost: () => undefined,
+            setProtocolActive: (active) => {
+              protocol.push(active);
+              if (!active) return Promise.resolve();
+              Deferred.doneUnsafe(started, Effect.void);
+              return ready.promise.then(() => {
+                if (refuse) throw new Error("Native parent refused rendering");
+              });
+            },
+          },
+        });
+        const replies = yield* watchReplies(host);
+        const sent = debuggee.nextSend();
+        yield* command(host, 1, "Page.captureScreenshot");
+        yield* Deferred.await(started);
+        expect(debuggee.sent).toEqual([]);
+        ready.resolve();
+        if (refuse) {
+          expect(yield* Queue.take(replies)).toBe(1);
+          expect(debuggee.sent).toEqual([]);
+        } else {
+          yield* Effect.promise(() => sent);
+          expect(debuggee.sent).toEqual([1]);
+          debuggee.release();
+          expect(yield* Queue.take(replies)).toBe(1);
+        }
+        host.detach(key);
+        expect(protocol).toEqual([true, false]);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "waits for the current guest's committed capture layout before sending a screenshot",
     () =>

@@ -9,6 +9,7 @@ const electron = vi.hoisted(() => ({
   configureWebAuthn: vi.fn(),
   showMessageBox: vi.fn(),
   fromWebContents: vi.fn(),
+  nativeParent: vi.fn(),
 }));
 const webauthn = vi.hoisted(() => ({ createCredential: vi.fn(), getCredential: vi.fn() }));
 
@@ -19,6 +20,7 @@ vi.mock("electron", () => ({
   webContents: { fromFrame: () => undefined },
 }));
 vi.mock("electron-webauthn", () => webauthn);
+vi.mock("./NativeBrowserView.ts", () => ({ nativeBrowserDialogParent: electron.nativeParent }));
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
@@ -87,6 +89,7 @@ const attestationObject = (authData: ReadonlyArray<number>) => {
 describe("PreviewPasskeys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    electron.nativeParent.mockReturnValue(undefined);
     electron.fromWebContents.mockReturnValue({
       isDestroyed: () => false,
       getNativeWindowHandle: () => Buffer.from([1]),
@@ -122,6 +125,14 @@ describe("PreviewPasskeys", () => {
 
       yield* call(PASSKEY_GET_CHANNEL, { challenge: new Uint8Array([1]) });
       assert.strictEqual(webauthn.getCredential.mock.calls[1]?.[0].rpId, "accounts.example.com");
+
+      Object.assign(guest, { hostWebContents: undefined });
+      electron.nativeParent.mockReturnValue({
+        isDestroyed: () => false,
+        getNativeWindowHandle: () => Buffer.from([2]),
+      });
+      yield* call(PASSKEY_GET_CHANNEL, publicKey);
+      assert.strictEqual(webauthn.getCredential.mock.calls.length, 3);
 
       const forged = yield* call(PASSKEY_CREATE_CHANNEL, publicKey, {
         origin: "https://evil.example",

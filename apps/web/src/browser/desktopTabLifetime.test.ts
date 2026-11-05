@@ -4,12 +4,13 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ThreadId,
+  type DesktopPreviewTabDefaults,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const { closeTab, createTab, stopBrowserRecording } = vi.hoisted(() => ({
   closeTab: vi.fn<(tabId: string) => Promise<void>>(async () => undefined),
-  createTab: vi.fn<() => Promise<void>>(),
+  createTab: vi.fn<(tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>>(),
   stopBrowserRecording: vi.fn(async () => null),
 }));
 
@@ -100,6 +101,33 @@ describe("desktopTabLifetime", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(closeTab).toHaveBeenCalledWith("tab_recording_cleanup");
+  });
+
+  it("keeps a native page and its selected profile alive across concurrent panel leases", async () => {
+    vi.useFakeTimers();
+    createTab.mockResolvedValue(undefined);
+    const nativeView = {
+      environmentId: EnvironmentId.make("environment-native"),
+      profileId: "profile-work",
+      width: 1280,
+      height: 800,
+    };
+    const serverTab = { threadId: "thread-native", tabId: "tab-native" };
+    const first = acquireDesktopTab("native-profile", serverTab, { nativeView });
+    const second = acquireDesktopTab("native-profile", serverTab, { nativeView });
+    await Promise.all([first.ready, second.ready]);
+    expect(createTab).toHaveBeenCalledOnce();
+    expect(createTab).toHaveBeenCalledWith("native-profile", {
+      ...DEFAULT_TAB_STATE,
+      serverTab,
+      nativeView,
+    });
+    first.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closeTab).not.toHaveBeenCalled();
+    second.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closeTab).toHaveBeenCalledWith("native-profile");
   });
 
   it("waits for an in-flight close before recreating a reacquired tab", async () => {

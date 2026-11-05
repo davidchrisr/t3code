@@ -331,6 +331,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         zoomFactor: defaults?.zoomFactor,
         serverTab: defaults?.serverTab,
         colorScheme: defaults?.colorScheme,
+        nativeView: defaults?.nativeView,
       }),
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
     registerWebview: (tabId, webContentsId) =>
@@ -416,6 +417,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, wrappedListener);
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, wrappedListener);
+    },
+    onNativeFocus: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, tabId: unknown) => {
+        if (typeof tabId === "string") listener(tabId);
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_NATIVE_FOCUS_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_NATIVE_FOCUS_CHANNEL, wrapped);
     },
     onPointerEvent: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, pointerEvent: unknown) => {

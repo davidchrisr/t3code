@@ -44,46 +44,63 @@ describe("preview guest input", () => {
     expect(guest.sendCommand).not.toHaveBeenCalledWith("Input.insertText", expect.anything());
   });
 
-  it.each([
-    {
-      sessionId: undefined,
-      method: "Input.dispatchMouseEvent",
-      type: "mousePressed",
-      outcome: "restore",
-    },
-    {
-      sessionId: "child-frame",
-      method: "Input.dispatchMouseEvent",
-      type: "mousePressed",
-      outcome: "restore",
-    },
-    {
-      sessionId: undefined,
-      method: "Input.dispatchTouchEvent",
-      type: "touchStart",
-      outcome: "restore",
-    },
-    {
-      sessionId: undefined,
-      method: "Input.dispatchMouseEvent",
-      type: "mousePressed",
-      outcome: "other-field",
-    },
-    {
-      sessionId: undefined,
-      method: "Input.dispatchMouseEvent",
-      type: "mousePressed",
-      outcome: "removed",
-    },
-    {
-      sessionId: undefined,
-      method: "Input.dispatchMouseEvent",
-      type: "mousePressed",
-      outcome: "failure",
-    },
-  ])(
-    "preserves host focus for $method in $sessionId with $outcome",
-    async ({ sessionId, method, type, outcome }) => {
+  it.each(
+    [
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "restore",
+      },
+      {
+        sessionId: "child-frame",
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "restore",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchTouchEvent",
+        type: "touchStart",
+        outcome: "restore",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "other-field",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "removed",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "failure",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "unfocused-host",
+      },
+      {
+        sessionId: undefined,
+        method: "Input.dispatchMouseEvent",
+        type: "mousePressed",
+        outcome: "window-blur",
+      },
+    ].flatMap((input) => [
+      { ...input, native: false },
+      { ...input, native: true },
+    ]),
+  )(
+    "preserves host focus for $method in $sessionId with $outcome, native: $native",
+    async ({ sessionId, method, type, outcome, native }) => {
       const document = { activeElement: {} as object };
       const composer = {
         isConnected: true,
@@ -95,14 +112,27 @@ describe("preview guest input", () => {
       const otherField = { tagName: "INPUT" };
       document.activeElement = composer;
       const context = NodeVM.createContext({ document });
+      const focus = vi.fn();
+      let windowFocused = outcome !== "unfocused-host";
       const host = {
         isDestroyed: () => false,
         executeJavaScript: async (script: string) => NodeVM.runInContext(script, context),
+        focusedFrame: {},
+        isFocused: () => outcome !== "unfocused-host",
+        isWindowFocused: () => windowFocused,
+        focus,
       };
-      const guest = { id: 7, focusedFrame: null, hostWebContents: host };
+      const guest = {
+        id: 7,
+        focusedFrame: null as object | null,
+        hostWebContents: native ? { executeJavaScript: vi.fn() } : host,
+      };
       const debuggee = {
         sendCommand: async () => {
-          document.activeElement = outcome === "other-field" ? otherField : preview;
+          document.activeElement =
+            outcome === "other-field" ? otherField : native ? composer : preview;
+          if (native) guest.focusedFrame = {};
+          if (outcome === "window-blur") windowFocused = false;
           if (outcome === "removed") composer.isConnected = false;
           if (outcome === "failure") throw new Error("Pointer failed");
           return {};
@@ -114,11 +144,26 @@ describe("preview guest input", () => {
         method,
         { type, x: 10, y: 10, button: "left" },
         sessionId,
+        native
+          ? {
+              webContents: host as unknown as Electron.WebContents,
+              isWindowFocused: () => windowFocused,
+            }
+          : undefined,
       );
       if (outcome === "failure") await expect(result).rejects.toThrow("Pointer failed");
       else await result;
       expect(document.activeElement).toBe(
-        outcome === "other-field" ? otherField : outcome === "removed" ? preview : composer,
+        outcome === "other-field"
+          ? otherField
+          : outcome === "removed" && !native
+            ? preview
+            : composer,
+      );
+      expect(focus).toHaveBeenCalledTimes(
+        native && !["other-field", "removed", "unfocused-host", "window-blur"].includes(outcome)
+          ? 1
+          : 0,
       );
       expect(Object.keys(context)).toEqual(["document"]);
     },

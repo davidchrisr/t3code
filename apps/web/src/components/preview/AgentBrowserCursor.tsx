@@ -22,6 +22,7 @@ export function AgentBrowserCursor(props: {
 
   return (
     <AgentBrowserCursorEvent
+      tabId={tabId}
       event={event}
       content={content}
       zoomFactor={zoomFactor}
@@ -31,6 +32,7 @@ export function AgentBrowserCursor(props: {
 }
 
 function AgentBrowserCursorEvent(props: {
+  readonly tabId: string;
   readonly event: DesktopPreviewPointerEvent;
   readonly content: {
     readonly x: number;
@@ -42,10 +44,11 @@ function AgentBrowserCursorEvent(props: {
   readonly zoomFactor: number;
   readonly controller: BrowserController;
 }) {
-  const { event, content, zoomFactor, controller } = props;
+  const { tabId, event, content, zoomFactor, controller } = props;
   const scale = zoomFactor * (content?.scale ?? 1);
   return (
     <AgentCursorMark
+      tabId={tabId}
       phase={event.phase}
       sequence={event.sequence}
       left={event.x * scale + (content?.x ?? 0) - (content?.scrollLeft ?? 0)}
@@ -56,13 +59,14 @@ function AgentBrowserCursorEvent(props: {
 }
 
 export function AgentCursorMark(props: {
+  readonly tabId?: string;
   readonly phase: "move" | "click";
   readonly sequence: number;
   readonly left: number;
   readonly top: number;
   readonly controller: BrowserController;
 }) {
-  const { phase, sequence, left, top, controller } = props;
+  const { tabId, phase, sequence, left, top, controller } = props;
   const [inactiveSequence, setInactiveSequence] = useState<number | null>(null);
   const active = inactiveSequence !== sequence;
 
@@ -81,6 +85,7 @@ export function AgentCursorMark(props: {
       }}
       aria-hidden="true"
       data-agent-browser-cursor
+      data-agent-browser-cursor-tab={tabId}
     >
       {phase === "click" ? (
         <span

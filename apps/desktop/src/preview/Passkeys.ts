@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { nativeBrowserDialogParent } from "./NativeBrowserView.ts";
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
 import type { PasskeyBackend, PasskeyCeremonyContext } from "./PasskeyBackend.ts";
 import { macPasskeyBackend } from "./PasskeyBackendMac.ts";
@@ -57,6 +58,8 @@ const accountLabel = (account: Electron.WebAuthnAccount) =>
 
 const ownerWindow = (frame: WebFrameMain | null) => {
   const contents = frame ? electronWebContents.fromFrame(frame) : undefined;
+  const nativeParent = contents ? nativeBrowserDialogParent(contents) : undefined;
+  if (nativeParent) return nativeParent.isDestroyed() ? null : nativeParent;
   const owner = contents?.hostWebContents ?? contents;
   return owner ? BrowserWindow.fromWebContents(owner) : null;
 };
@@ -171,9 +174,9 @@ const make = Effect.gen(function* () {
         if (typeof publicKey !== "object" || publicKey === null) {
           return { success: false, error: "TypeError" };
         }
-        const host = guest.hostWebContents
-          ? BrowserWindow.fromWebContents(guest.hostWebContents)
-          : null;
+        const host =
+          nativeBrowserDialogParent(guest) ??
+          (guest.hostWebContents ? BrowserWindow.fromWebContents(guest.hostWebContents) : null);
         if (!host || host.isDestroyed()) return notAllowed;
 
         ceremonyPending = true;

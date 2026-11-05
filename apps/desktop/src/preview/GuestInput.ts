@@ -1,5 +1,10 @@
 // CDP input follows shared window focus; send directly to unfocused guests to avoid typing into the app.
 
+export interface BrowserApplicationHost {
+  readonly webContents: Electron.WebContents;
+  readonly isWindowFocused: () => boolean;
+}
+
 const FOCUS_ROUTED_INPUT = new Set([
   "Input.insertText",
   "Input.dispatchKeyEvent",
@@ -102,9 +107,17 @@ const sendPointerPress = async (
   method: string,
   params: Record<string, unknown>,
   sessionId: string | undefined,
+  applicationHost: BrowserApplicationHost | undefined,
 ) => {
-  const host = webContents.hostWebContents;
-  if (!host || host.isDestroyed() || webContents.focusedFrame) {
+  const host = applicationHost?.webContents ?? webContents.hostWebContents;
+  const native = applicationHost !== undefined;
+  if (
+    !host ||
+    host.isDestroyed() ||
+    webContents.focusedFrame ||
+    (applicationHost &&
+      (!host.isFocused() || !host.focusedFrame || !applicationHost.isWindowFocused()))
+  ) {
     return debuggee.sendCommand(method, params, sessionId);
   }
   // Focus in a webview with a press in flight came from that press, so keep the earlier save.
@@ -125,7 +138,7 @@ const sendPointerPress = async (
   } finally {
     if (!host.isDestroyed()) {
       // Membership check: a host reload starts a new state without this press.
-      await host.executeJavaScript(`(() => {
+      const restore = await host.executeJavaScript(`(() => {
         const state = ${HOST_FOCUS};
         const index = state ? state.presses.indexOf(${webContents.id}) : -1;
         if (index < 0) return;
@@ -133,15 +146,29 @@ const sendPointerPress = async (
         if (state.presses.length === 0) delete ${HOST_FOCUS};
         const current = document.activeElement;
         try {
-          if (state.saved?.isConnected && current?.tagName === "WEBVIEW" &&
-              current.getWebContentsId() === ${webContents.id}) state.saved.focus({ preventScroll: true });
+          if (state.saved?.isConnected && (${native} ? current === state.saved :
+              current?.tagName === "WEBVIEW" && current.getWebContentsId() === ${webContents.id})) {
+            state.saved.focus({ preventScroll: true });
+            return true;
+          }
         } catch {}
       })()`);
+      if (
+        applicationHost &&
+        restore &&
+        webContents.focusedFrame &&
+        !host.isDestroyed() &&
+        applicationHost.isWindowFocused()
+      )
+        host.focus();
     }
   }
 };
 
 const pointerCommands = new WeakMap<Electron.WebContents, Promise<unknown>>();
+
+export const isAgentPointerInFlight = (contents: Electron.WebContents) =>
+  pointerCommands.has(contents);
 
 /** Focus capture crosses processes; later pointer events must not overtake the press. */
 const sendPointerCommand = async (
@@ -150,13 +177,14 @@ const sendPointerCommand = async (
   method: string,
   params: Record<string, unknown>,
   sessionId: string | undefined,
+  applicationHost: BrowserApplicationHost | undefined,
 ) => {
   const previous = pointerCommands.get(webContents) ?? Promise.resolve();
   const current = previous
     .catch(() => {})
     .then(() =>
       params["type"] === "mousePressed" || params["type"] === "touchStart"
-        ? sendPointerPress(webContents, debuggee, method, params, sessionId)
+        ? sendPointerPress(webContents, debuggee, method, params, sessionId, applicationHost)
         : debuggee.sendCommand(method, params, sessionId),
     );
   pointerCommands.set(webContents, current);
@@ -174,9 +202,10 @@ export const sendPageCommand = async (
   method: string,
   params: Record<string, unknown>,
   sessionId?: string,
+  applicationHost?: BrowserApplicationHost,
 ): Promise<unknown> => {
   if (method === "Input.dispatchMouseEvent" || method === "Input.dispatchTouchEvent") {
-    return sendPointerCommand(webContents, debuggee, method, params, sessionId);
+    return sendPointerCommand(webContents, debuggee, method, params, sessionId, applicationHost);
   }
   if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
   // Electron's debugger routes Page.reload on a webview to its embedder window.

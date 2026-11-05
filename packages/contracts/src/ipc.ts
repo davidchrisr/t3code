@@ -15,6 +15,7 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
+import { PREVIEW_VIEWPORT_MAX_DIMENSION, PREVIEW_VIEWPORT_MAX_AREA } from "./preview.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -941,17 +942,32 @@ export const DesktopPreviewTabInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
 });
 
+export const DesktopPreviewNativeViewInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  profileId: Schema.optional(BrowserProfileId),
+  initialUrl: Schema.optional(Schema.String),
+  width: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: PREVIEW_VIEWPORT_MAX_DIMENSION }),
+  ),
+  height: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: PREVIEW_VIEWPORT_MAX_DIMENSION }),
+  ),
+}).check(Schema.makeFilter((size) => size.width * size.height <= PREVIEW_VIEWPORT_MAX_AREA));
+export type DesktopPreviewNativeViewInput = typeof DesktopPreviewNativeViewInputSchema.Type;
+
 /** Apply zoom and color scheme at creation to avoid flashing browser defaults. */
 export const DesktopPreviewCreateTabInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   zoomFactor: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
   colorScheme: Schema.optional(DesktopPreviewColorSchemeSchema),
+  nativeView: Schema.optional(DesktopPreviewNativeViewInputSchema),
   serverTab: Schema.optional(
     Schema.Struct({ threadId: TrimmedNonEmptyString, tabId: TrimmedNonEmptyString }),
   ),
 });
 
 export interface DesktopPreviewTabDefaults {
+  readonly nativeView?: DesktopPreviewNativeViewInput | undefined;
   readonly zoomFactor?: number | undefined;
   readonly colorScheme?: DesktopPreviewColorScheme | undefined;
   readonly serverTab?: { readonly threadId: string; readonly tabId: string } | undefined;
@@ -965,6 +981,40 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewPresentationInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   visible: Schema.Boolean,
+  nativeView: Schema.optional(
+    Schema.Struct({
+      bounds: Schema.Struct({
+        x: Schema.Int,
+        y: Schema.Int,
+        width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
+        height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16384 })),
+      }),
+      cursor: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            x: Schema.Number.check(Schema.isBetween({ minimum: -16384, maximum: 16384 })),
+            y: Schema.Number.check(Schema.isBetween({ minimum: -16384, maximum: 16384 })),
+            width: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(512)),
+            height: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(512)),
+            opacity: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+            image: Schema.String.check(
+              Schema.isMaxLength(16384),
+              Schema.isPattern(/^data:image\/svg\+xml,/),
+            ),
+          }),
+        ),
+      ),
+      contentSize: Schema.Struct({
+        width: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(19200)),
+        height: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(19200)),
+      }),
+      visible: Schema.Boolean,
+      scale: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1)),
+      cornerRadius: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 256 })),
+      interactive: Schema.Boolean,
+      zIndex: Schema.Int,
+    }),
+  ),
   captureReady: Schema.optional(
     Schema.Struct({
       requestId: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -1218,6 +1268,7 @@ export interface DesktopPreviewBridge {
     ) => Promise<DesktopPreviewRecordingArtifact>;
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
+  onNativeFocus?: (listener: (tabId: string) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }

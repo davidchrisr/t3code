@@ -232,7 +232,10 @@ function layerTest(input: {
   readonly beforeMainWindowBoundsUpdate?: (
     bounds: DesktopAppSettings.DesktopWindowBounds,
   ) => Effect.Effect<void>;
-  readonly setPreviewMainWindow?: (window: Electron.BrowserWindow) => Effect.Effect<void>;
+  readonly setPreviewMainWindow?: (
+    window: Electron.BrowserWindow,
+    initializeContents?: (contents: Electron.WebContents) => void,
+  ) => Effect.Effect<void>;
   readonly destroyAll?: Effect.Effect<void>;
   readonly onWindowCreate?: Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
@@ -467,6 +470,46 @@ const captureOne = DesktopSnapShotId.make("11111111-1111-4111-8111-111111111111"
 const captureTwo = DesktopSnapShotId.make("22222222-2222-4222-8222-222222222222");
 
 describe("DesktopWindow", () => {
+  it.effect("gives native preview contents the existing editing context menu", () =>
+    Effect.gen(function* () {
+      const main = makeFakeBrowserWindow();
+      const native = makeFakeBrowserWindow();
+      const opened = yield* Deferred.make<ElectronMenu.ElectronMenuTemplateInput>();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const handler = native.webContentsListeners.get("context-menu");
+        assert.isDefined(handler);
+        handler!(
+          { preventDefault: vi.fn() },
+          {
+            misspelledWord: "",
+            dictionarySuggestions: [],
+            linkURL: "https://example.com/",
+            mediaType: "none",
+            editFlags: { canCut: false, canCopy: true, canPaste: true, canSelectAll: true },
+          },
+        );
+        const menu = yield* Deferred.await(opened);
+        assert.strictEqual(menu.window, main.window);
+        assert.isTrue(menu.template.some((item) => item.label === "Copy Link"));
+        assert.isTrue(menu.template.some((item) => item.role === "copy" && item.enabled));
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            window: main.window,
+            createCount,
+            mainWindow,
+            setPreviewMainWindow: (_window, initialize) =>
+              Effect.sync(() => initialize?.(native.window.webContents)),
+            onPopupTemplate: (menu) => Deferred.succeed(opened, menu),
+          }),
+        ),
+      );
+    }),
+  );
   it("restores bounds only when the window fits within a connected display", () => {
     const persistedBounds = { x: 2040, y: 80, width: 1320, height: 880 };
     const displays = [

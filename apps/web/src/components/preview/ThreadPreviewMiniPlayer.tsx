@@ -37,7 +37,7 @@ import { useBrowserLayoutZoomFactor } from "~/browser/useBrowserLayoutZoomFactor
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import { useThreadPreviewState } from "~/previewStateStore";
 import {
   type PreviewMiniPlayerSize,
@@ -142,6 +142,8 @@ function useBrowserMiniPlayerSource(threadRef: ScopedThreadRef | null, tabId: st
     threadRef !== null &&
     snapshot?.runtime === "server" &&
     !rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot);
+  const streamedDisplay =
+    serverTab || (isMacPlatform(navigator.platform) && snapshot?.runtime === "server");
   const streamViewport = useStreamedSourceSize((state) =>
     threadRef &&
     tabId !== null &&
@@ -151,14 +153,21 @@ function useBrowserMiniPlayerSource(threadRef: ScopedThreadRef | null, tabId: st
       : null,
   );
   const sourceSize: PreviewMiniPlayerSize =
-    serverTab && streamViewport
+    streamedDisplay && streamViewport
       ? streamViewport
       : resolvePreviewMiniPlayerSourceSize(
           snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT,
           fittedSourceContent,
           layoutZoomFactor,
         );
-  return { serverEpoch: previewState.serverEpoch, snapshot, desktopOverlay, serverTab, sourceSize };
+  return {
+    serverEpoch: previewState.serverEpoch,
+    snapshot,
+    desktopOverlay,
+    serverTab,
+    streamedDisplay,
+    sourceSize,
+  };
 }
 
 /** The mini player as the chat canvas lays it out; null when no player renders. */
@@ -212,7 +221,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
 
 function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {
   const httpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
-  const { serverEpoch, snapshot, desktopOverlay, serverTab, sourceSize } =
+  const { serverEpoch, snapshot, desktopOverlay, serverTab, streamedDisplay, sourceSize } =
     useBrowserMiniPlayerSource(threadRef, tabId);
   const runtimeTabId = previewRuntimeTabId(threadRef, serverEpoch, tabId);
   const recordingTabIds = useActiveBrowserRecordingTabIds();
@@ -302,7 +311,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
       }
     >
       {(frame) =>
-        serverTab ? (
+        streamedDisplay ? (
           <div
             className="pointer-events-auto absolute inset-0 overflow-hidden rounded-[inherit]"
             style={{ zIndex: PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX }}

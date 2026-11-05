@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import { nativeBrowserDialogParent } from "./NativeBrowserView.ts";
 
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 /** Ephemeral partitions omit persist: but retain a product prefix so the webview gate recognizes them. */
@@ -179,6 +180,8 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
 // Webview guests have no window; use their embedding page.
 const previewHostWindow = (guest: WebContents | null): BrowserWindow | undefined => {
   if (guest === null || guest.isDestroyed()) return undefined;
+  const nativeParent = nativeBrowserDialogParent(guest);
+  if (nativeParent) return nativeParent.isDestroyed() ? undefined : nativeParent;
   const host = guest.hostWebContents ?? guest;
   if (host.isDestroyed()) return undefined;
   return BrowserWindow.fromWebContents(host) ?? undefined;

@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts";
-import { sendPageCommand } from "./GuestInput.ts";
+import { sendPageCommand, type BrowserApplicationHost } from "./GuestInput.ts";
 
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
@@ -40,6 +40,11 @@ export interface DesktopBrowserTabDebugger {
   readonly runtimeTabId: string;
   readonly webContents: Electron.WebContents;
   readonly debugger: Electron.Debugger;
+  readonly nativeView?: {
+    readonly rendererId: () => number | undefined;
+    readonly applicationHost: () => BrowserApplicationHost | undefined;
+    readonly setProtocolActive: (active: boolean) => Promise<void>;
+  };
 }
 
 const keyOf = ({ threadId, tabId }: DesktopBrowserTabKey) => `${threadId}\u0000${tabId}`;
@@ -196,16 +201,15 @@ export const make = Effect.gen(function* () {
   const setFocusEmulation = (tab: AttachedTab, enabled: boolean) => {
     if (tab.focusEmulated === enabled) return;
     tab.focusEmulated = enabled;
-    // A guest that refuses it, or a debugger already gone, behaves as unfocused.
-    const change: Promise<void> = tab.debuggee.debugger
-      .sendCommand("Emulation.setFocusEmulationEnabled", { enabled })
-      .then(
-        () => undefined,
-        () => undefined,
-      )
-      .finally(() => {
-        if (tab.focusChange === change) tab.focusChange = null;
-      });
+    // The native parent must composite before any command can wait on its guest's frame.
+    const change = Promise.all([
+      tab.debuggee.nativeView?.setProtocolActive(enabled),
+      tab.debuggee.debugger
+        .sendCommand("Emulation.setFocusEmulationEnabled", { enabled })
+        .catch(() => undefined),
+    ]).then(() => undefined);
+    // Releases have no caller waiting; commands still observe a failed preparation below.
+    void change.catch(() => {});
     tab.focusChange = change;
   };
 
@@ -250,6 +254,7 @@ export const make = Effect.gen(function* () {
     tab.painting = active;
     if (active) {
       tab.paintReady = { requestId: ++paintSequence, ready: Deferred.makeUnsafe<boolean>() };
+      if (tab.debuggee.nativeView) Deferred.doneUnsafe(tab.paintReady.ready, Effect.succeed(true));
     } else {
       if (tab.paintReady) Deferred.doneUnsafe(tab.paintReady.ready, Effect.succeed(false));
       tab.paintReady = null;
@@ -356,7 +361,14 @@ export const make = Effect.gen(function* () {
     if (tab.relay) return tab.relay;
     const { webContents, debugger: debuggee } = tab.debuggee;
     const send = (method: string, params: Record<string, unknown>, sessionId?: string) =>
-      sendPageCommand(webContents, debuggee, method, params, sessionId);
+      sendPageCommand(
+        webContents,
+        debuggee,
+        method,
+        params,
+        sessionId,
+        tab.debuggee.nativeView?.applicationHost(),
+      );
     const detachedOwners = new Set<string>();
     /** Viewers and recordings stream; the agent's own sessions never do. */
     const streamingOwners = new Set<string>();
@@ -467,6 +479,7 @@ export const make = Effect.gen(function* () {
     const id = keyOf(key);
     const tab = tabs.get(id);
     if (!tab) return;
+    setFocusEmulation(tab, false);
     tabs.delete(id);
     tab.relay = null;
     tab.debuggee.debugger.off("message", tab.onMessage);
@@ -566,7 +579,9 @@ export const make = Effect.gen(function* () {
       (tab) =>
         tab.debuggee.runtimeTabId === tabId &&
         !tab.debuggee.webContents.isDestroyed() &&
-        tab.debuggee.webContents.hostWebContents?.id === rendererId,
+        (tab.debuggee.nativeView
+          ? tab.debuggee.nativeView.rendererId()
+          : tab.debuggee.webContents.hostWebContents?.id) === rendererId,
     );
     if (!tab) return;
     if (

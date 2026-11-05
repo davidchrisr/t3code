@@ -1,4 +1,6 @@
 import { it as effectIt } from "@effect/vitest";
+import { sendPageCommand } from "./GuestInput.ts";
+import { PREVIEW_NATIVE_FOCUS_CHANNEL } from "../ipc/channels.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   DesktopBrowserEvent,
@@ -153,7 +155,9 @@ const {
   webviewSend,
   writeFile,
   writeClipboard,
+  createNativeBrowserView,
 } = vi.hoisted(() => ({
+  createNativeBrowserView: vi.fn<typeof import("./NativeBrowserView.ts").createNativeBrowserView>(),
   browserWindowConstructor: vi.fn(),
   clipboardItemConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean; readonly toPNG: () => Buffer } => ({
@@ -168,6 +172,11 @@ const {
   webviewSend: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
   writeClipboard: vi.fn(async () => undefined),
+}));
+
+vi.mock("./NativeBrowserView.ts", () => ({
+  createNativeBrowserView,
+  nativeBrowserDialogParent: () => undefined,
 }));
 
 vi.mock("electron", () => ({
@@ -559,6 +568,7 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
 
 describe("PreviewManager", () => {
   beforeEach(() => {
+    createNativeBrowserView.mockReset();
     browserWindowConstructor.mockReset();
     fromId.mockClear();
     getFocusedWebContents.mockReset();
@@ -572,6 +582,260 @@ describe("PreviewManager", () => {
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
+
+  effectIt.effect(
+    "owns native pages, rejects profile replacement, and closes the page with its tab",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const session = {} as Electron.Session;
+          let destroyed = false;
+          const nativeListeners = new Map<string, () => void>();
+          const contents = Object.assign(
+            makeTestPreviewWebContents(async () => ({
+              toJPEG: () => Buffer.from("frame"),
+              getSize: () => ({ width: 1000, height: 700 }),
+            })),
+            {
+              session,
+              on: (event: string, listener: () => void) => {
+                nativeListeners.set(event, listener);
+                return contents;
+              },
+              focusedFrame: {} as Electron.WebFrameMain,
+              hostWebContents: undefined,
+              getType: () => "window",
+              isDestroyed: () => destroyed,
+              isDevToolsOpened: () => false,
+              loadURL: vi.fn(async () => undefined),
+            },
+          ) as unknown as Electron.WebContents;
+          fromId.mockReturnValue(contents);
+          const close = vi.fn(async () => {
+            destroyed = true;
+          });
+          const page = {
+            webContents: contents,
+            close,
+            park: vi.fn(),
+            present: vi.fn(),
+            setLayout: vi.fn(async () => undefined),
+            setRenderingActive: vi.fn(async () => undefined),
+            setMainWindow: vi.fn(),
+            setZoomFactor: vi.fn(),
+            setInteractive: vi.fn(),
+            raise: vi.fn(),
+          };
+          createNativeBrowserView.mockResolvedValue(page);
+          const recordingHost = makeTestHostWebContents();
+          let nativeWindowFocused = true;
+          const focusNotices: string[] = [];
+          const notice = yield* Deferred.make<void>();
+          yield* manager.setMainWindow({
+            isVisible: () => true,
+            isMinimized: () => false,
+            isFocused: () => nativeWindowFocused,
+            isDestroyed: () => false,
+            once: vi.fn(),
+            getContentSize: () => [1200, 800],
+            webContents: {
+              ...recordingHost,
+              setBackgroundThrottling: vi.fn(),
+              send: (channel: string, id: string) => {
+                if (channel === PREVIEW_NATIVE_FOCUS_CHANNEL) {
+                  focusNotices.push(id);
+                  Deferred.doneUnsafe(notice, Effect.void);
+                }
+              },
+            },
+          } as unknown as Electron.BrowserWindow);
+          const options = { session, partition: "test-profile", width: 1000, height: 700 };
+          const first = yield* manager.createNativeTab("native-owned", options);
+          yield* manager.setZoomFactor("native-owned", 1.25);
+          const replayed: Array<{
+            readonly zoomFactor: number;
+            readonly webContentsId: number | null;
+          }> = [];
+          yield* manager.subscribeStateChanges((_id, state) =>
+            Effect.sync(() => {
+              replayed.push(state);
+            }),
+          );
+          const second = yield* manager.createNativeTab("native-owned", options);
+          expect(replayed).toEqual([second]);
+          expect(replayed[0]?.zoomFactor).toBe(1.25);
+          const focus = nativeListeners.get("focus");
+          expect(focus).toBeTypeOf("function");
+          focus!();
+          yield* Deferred.await(notice);
+          expect(focusNotices).toEqual(["native-owned"]);
+          nativeWindowFocused = false;
+          focus!();
+          nativeWindowFocused = true;
+          yield* Effect.promise(() =>
+            sendPageCommand(
+              contents,
+              {
+                sendCommand: async () => {
+                  focus!();
+                  return {};
+                },
+              } as unknown as Electron.Debugger,
+              "Input.dispatchMouseEvent",
+              { type: "mousePressed", x: 10, y: 10, button: "left" },
+            ),
+          );
+          expect(focusNotices).toEqual(["native-owned"]);
+          expect(first.webContentsId).toBe(contents.id);
+          expect(second.webContentsId).toBe(contents.id);
+          expect(contents.loadURL).not.toHaveBeenCalled();
+          const wrongProfile = yield* Effect.exit(
+            manager.createNativeTab("native-owned", {
+              ...options,
+              session: {} as Electron.Session,
+            }),
+          );
+          expect(Exit.isFailure(wrongProfile)).toBe(true);
+          expect(close).not.toHaveBeenCalled();
+          const presentation = {
+            tabId: "native-owned",
+            visible: true,
+            nativeView: {
+              bounds: { x: 600, y: 80, width: 500, height: 600 },
+              visible: true,
+              contentSize: { width: 1000, height: 1200 },
+              scale: 0.5,
+              cornerRadius: 8,
+              interactive: true,
+              zIndex: 30,
+            },
+          };
+          yield* manager.updateNativePresentation(presentation, 99);
+          expect(page.present).not.toHaveBeenCalled();
+          yield* manager.updateNativePresentation(presentation, 7);
+          expect(page.present).toHaveBeenCalledWith(
+            expect.anything(),
+            presentation.nativeView.bounds,
+            8,
+          );
+          expect(page.setLayout).toHaveBeenCalledWith(
+            { width: 1000, height: 1200 },
+            0.5,
+            500,
+            600,
+            undefined,
+          );
+          yield* manager.updateNativePresentation(
+            { ...presentation, nativeView: { ...presentation.nativeView, visible: false } },
+            7,
+          );
+          expect(page.park).toHaveBeenCalledTimes(1);
+          yield* manager.startRecording("native-owned");
+          const streams: Array<{ video?: unknown }> = [];
+          recordingHost.displayMediaHandler()?.({ frame: recordingHost.mainFrame }, (value) =>
+            streams.push(value),
+          );
+          expect(streams).toEqual([{ video: contents.mainFrame }]);
+          yield* manager.stopRecording("native-owned");
+          yield* manager.closeTab("native-owned");
+          expect(close).toHaveBeenCalledTimes(1);
+        }),
+      ),
+  );
+
+  effectIt.effect("releases a native page when startup fails and permits a later creation", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const session = {} as Electron.Session;
+        const contents = Object.assign(
+          makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("frame"),
+            getSize: () => ({ width: 1000, height: 700 }),
+          })),
+          {
+            session,
+            hostWebContents: undefined,
+            getType: () => "window",
+            isDevToolsOpened: () => false,
+            loadURL: vi
+              .fn()
+              .mockRejectedValueOnce(new Error("renderer failed"))
+              .mockResolvedValue(undefined),
+          },
+        ) as unknown as Electron.WebContents;
+        fromId.mockReturnValue(contents);
+        const close = vi.fn(async () => undefined);
+        createNativeBrowserView.mockResolvedValue({
+          webContents: contents,
+          close,
+          park: vi.fn(),
+          present: vi.fn(),
+          setLayout: vi.fn(async () => undefined),
+          setRenderingActive: vi.fn(async () => undefined),
+          setMainWindow: vi.fn(),
+          setZoomFactor: vi.fn(),
+          setInteractive: vi.fn(),
+          raise: vi.fn(),
+        });
+        const initialize = vi.fn().mockImplementationOnce(() => {
+          throw new Error("renderer initialization failed");
+        });
+        yield* manager.setMainWindow(
+          {
+            isDestroyed: () => false,
+            once: vi.fn(),
+            webContents: { id: 7, setBackgroundThrottling: vi.fn() },
+          } as unknown as Electron.BrowserWindow,
+          initialize,
+        );
+        const options = { session, partition: "test-profile", width: 1000, height: 700 };
+        expect(
+          Exit.isFailure(yield* Effect.exit(manager.createNativeTab("native-failed", options))),
+        ).toBe(true);
+        expect(close).toHaveBeenCalledTimes(1);
+        const created = yield* manager.createNativeTab("native-failed", options);
+        expect(created.webContentsId).toBe(contents.id);
+        yield* manager.closeTab("native-failed");
+        expect(close).toHaveBeenCalledTimes(2);
+        contents.loadURL = vi.fn(async (url: string) => {
+          if (url !== "about:blank") throw new Error("ERR_CONNECTION_REFUSED");
+        });
+        Object.assign(contents, {
+          on: (event: string, listener: () => void) => {
+            if (event === "did-stop-loading") listener();
+            return contents;
+          },
+        });
+        const failedNavigation = yield* manager.createNativeTab("native-navigation", {
+          ...options,
+          initialUrl: "https://unreachable.test/",
+        });
+        expect(failedNavigation.webContentsId).toBe(contents.id);
+        expect(contents.loadURL).toHaveBeenCalledWith("https://unreachable.test/");
+        expect(close).toHaveBeenCalledTimes(2);
+        yield* manager.closeTab("native-navigation");
+        expect(close).toHaveBeenCalledTimes(3);
+        const loading = yield* Deferred.make<void>();
+        let finishLoad: (() => void) | undefined;
+        contents.loadURL = vi.fn((url: string) =>
+          url === "about:blank"
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                finishLoad = resolve;
+                Deferred.doneUnsafe(loading, Effect.void);
+              }),
+        );
+        yield* manager.createNativeTab("native-pending-navigation", {
+          ...options,
+          initialUrl: "https://pending.test/",
+        });
+        yield* Deferred.await(loading);
+        yield* manager.closeTab("native-pending-navigation");
+        expect(close).toHaveBeenCalledTimes(4);
+        finishLoad?.();
+      }),
+    ),
+  );
 
   effectIt.effect.each([
     ["linux", "ctrl+alt+[", "[", "BracketLeft", false],
@@ -1595,6 +1859,63 @@ describe("PreviewManager", () => {
         expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
       }),
     ),
+  );
+
+  effectIt.effect(
+    "shares automation rendering with recording and restores it when the tab closes",
+    () =>
+      Effect.gen(function* () {
+        const manager = yield* PreviewManager.PreviewManager;
+        const browser = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const setBackgroundThrottling = vi.fn();
+        const host = makeTestHostWebContents();
+        Object.assign(host, { setBackgroundThrottling });
+        const guest = makeTestPreviewWebContents(
+          async () => ({
+            toJPEG: () => Buffer.from("frame"),
+            getSize: () => ({ width: 1280, height: 720 }),
+          }),
+          42,
+          host,
+        );
+        Object.assign(guest, { isDevToolsOpened: () => false });
+        fromId.mockReturnValue(guest);
+        const serverTab = { threadId: "capture-thread", tabId: "capture-tab" };
+        yield* manager.setMainWindow({
+          isDestroyed: () => false,
+          once: vi.fn(),
+          webContents: host,
+        } as never);
+        yield* manager.createTab("runtime-capture", { serverTab });
+        yield* manager.registerWebview("runtime-capture", 42);
+        const states = yield* Queue.unbounded<boolean>();
+        yield* manager.subscribeStateChanges((_id, state) =>
+          Queue.offer(states, state.capturing).pipe(Effect.asVoid),
+        );
+        yield* browser.handleCommandLine(
+          JSON.stringify({
+            type: "cdp",
+            ...serverTab,
+            message: JSON.stringify({
+              id: 1,
+              method: "Page.captureScreenshot",
+              sessionId: "t3-preview-page",
+            }),
+          }),
+        );
+        expect(yield* Queue.take(states)).toBe(true);
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(guest.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        yield* manager.startRecording("runtime-capture");
+        host.displayMediaHandler()?.({ frame: host.mainFrame }, () => {});
+        yield* browser.handleCommandLine(JSON.stringify({ type: "release", ...serverTab }));
+        expect(yield* Queue.take(states)).toBe(false);
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        expect(guest.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+        yield* manager.closeTab("runtime-capture");
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(guest.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 
   effectIt.effect("does not commit failed starts and retries throttle restoration", () =>
