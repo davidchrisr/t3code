@@ -10818,7 +10818,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             // Preserve launcher-selected models unless the model changed or a failed update left it unknown.
             yield* (
               live.selection.queryIdentity === "" ||
-              live.selection.apiModelId !== compiledSelection.apiModelId
+              live.selection.apiModelId !== compiledSelection.apiModelId ||
+              live.currentModel !== compiledSelection.apiModelId
                 ? live.query.setModel(compiledSelection.apiModelId)
                 : Effect.void
             ).pipe(
