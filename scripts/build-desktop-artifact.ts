@@ -722,19 +722,6 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<Des
   }
 }
 
-export class DesktopBuildArtifactCopyError extends Schema.TaggedError<DesktopBuildArtifactCopyError>()(
-  "DesktopBuildArtifactCopyError",
-  {
-    source: Schema.String,
-    destination: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Failed to copy desktop artifact from ${this.source} to ${this.destination}.`;
-  }
-}
-
 export class WslRuntimeArchiveMissingError extends Schema.TaggedError<WslRuntimeArchiveMissingError>()(
   "WslRuntimeArchiveMissingError",
   {
@@ -1857,8 +1844,8 @@ export const copyDesktopBuildArtifact = Effect.fn("copyDesktopBuildArtifact")(fu
           NodeFSP.cp(input.source, input.destination, { recursive: true, verbatimSymlinks: true }),
         catch: (cause) =>
           new DesktopBuildArtifactCopyError({
-            source: input.source,
-            destination: input.destination,
+            from: input.source,
+            to: input.destination,
             cause,
           }),
       });
