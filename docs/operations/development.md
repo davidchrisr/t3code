@@ -364,13 +364,20 @@ Xcode tools while keeping dependency installation and compilation in a source
 copy. Put compatible tools on `PATH`, then run from the checkout:
 
 ```sh
-scripts/sandboxed-desktop-build.sh --check
-scripts/sandboxed-desktop-build.sh --arch arm64
+scripts/sandboxed-desktop-build.sh --worktree "$PWD" --check
+scripts/sandboxed-desktop-build.sh --worktree "$PWD" --arch arm64
 ```
 
 `--check` tests allowed writes and denied access from subprocesses before any
 dependency install. It also works before Node, `vp`, and Rust are installed.
-The build repeats these checks, installs desktop, server, and build-tool workspace
+`--print-paths` reports discovery without installing tools or creating build files.
+The selected source must belong to the wrapper's repository. Shared Git metadata
+locates the original checkout, whose `.local/scratch/macos-build/cache` and
+`tools` directories are reused directly. Each source checkout keeps its own
+build copies, installed dependencies, temporary homes, and output directories.
+Machine-specific tool paths belong in the original checkout's `.local/AGENTS.md`.
+
+The build repeats the isolation checks, installs desktop, server, and build-tool workspace
 dependencies with the frozen lockfile, and writes the app under
 `release/sandboxed-macos/<run>/`. Existing output
 directories are rejected rather than merged with stale bundle files.
@@ -392,12 +399,15 @@ them when the related build work is complete. Packaging uses a private OS-temp
 alias pointing to the local temporary directory because ASAR globs skip hidden
 path components. Each run's `temp-alias` file records the alias directory to
 remove with that run. Installed tools and Rust toolchains
-are readable but not writable. Network access is enabled for package downloads.
+are readable but not writable. Builds are offline by default. Missing pinned
+artifacts require approval before populating the shared cache; `--allow-downloads`
+enables network access and online installation when those downloads are approved.
+Cached Electron headers for the selected version are required before installation.
 
 To run a focused check in the same environment after dependency installation:
 
 ```sh
-scripts/sandboxed-desktop-build.sh -- vp test run scripts/build-desktop-artifact.test.ts
+scripts/sandboxed-desktop-build.sh --worktree "$PWD" -- vp test run scripts/build-desktop-artifact.test.ts
 ```
 
 This workflow uses macOS's deprecated `sandbox-exec` facility. The wrapper fails

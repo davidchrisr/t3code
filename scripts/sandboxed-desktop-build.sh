@@ -4,10 +4,13 @@ umask 077
 
 usage() {
   cat <<'EOF'
-Usage: scripts/sandboxed-desktop-build.sh [--arch arm64|x64|universal] [--check] [-- COMMAND ...]
+Usage: scripts/sandboxed-desktop-build.sh [--worktree PATH] [--arch arm64|x64|universal] [--check | --print-paths] [--allow-downloads] [-- COMMAND ...]
 
 Build a local macOS .app using an isolated source copy and sandboxed host tools.
 --check verifies the isolation boundary without installing dependencies or building.
+--worktree selects the source checkout; the default is this script's checkout.
+--print-paths reports source, shared cache, and private output paths without building.
+--allow-downloads enables network access after approval for the missing artifacts.
 COMMAND runs after a frozen desktop dependency install, in place of the artifact build.
 Build state and logs are retained under .local/scratch/macos-build/.
 Artifacts are written to release/sandboxed-macos/<run>/.
@@ -45,7 +48,7 @@ ensure_bootstrap_directory() {
 }
 
 main() {
-  local arch='' check=0 arch_seen=0
+  local arch='' check=0 arch_seen=0 worktree='' print_paths=0 allow_downloads=0
   local -a command_args=()
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -67,6 +70,30 @@ main() {
         esac
         arch_seen=1
         shift 2
+        ;;
+      --worktree)
+        [[ -z $worktree && $# -ge 2 && -n $2 && $2 != -* ]] || {
+          usage >&2
+          exit 2
+        }
+        worktree=$2
+        shift 2
+        ;;
+      --print-paths)
+        [[ $print_paths == 0 ]] || {
+          usage >&2
+          exit 2
+        }
+        print_paths=1
+        shift
+        ;;
+      --allow-downloads)
+        [[ $allow_downloads == 0 ]] || {
+          usage >&2
+          exit 2
+        }
+        allow_downloads=1
+        shift
         ;;
       --check)
         [[ $check == 0 ]] || {
@@ -95,13 +122,35 @@ main() {
     usage >&2
     exit 2
   }
-  [[ $(uname -s) == Darwin ]] || fail 'This build requires macOS.'
+  [[ $print_paths == 0 || ($check == 0 && ${#command_args[@]} == 0) ]] || {
+    usage >&2
+    exit 2
+  }
 
-  local script_path script_dir project_dir build_root cache_dir run_dir probe_dir output_dir
+  local script_path script_dir project_dir shared_dir shared_git helper_git build_root shared_root tools_dir cache_dir run_dir probe_dir output_dir
   local os_temp_root temp_alias_root
+  require_command realpath >/dev/null
+  require_command git >/dev/null
   script_path=$(realpath -- "${BASH_SOURCE[0]}")
   script_dir=$(dirname "$script_path")
-  project_dir=$(dirname "$script_dir")
+  project_dir=$(realpath -- "${worktree:-$(dirname "$script_dir")}")
+  [[ $(git -C "$project_dir" rev-parse --show-toplevel) == "$project_dir" ]] || fail 'Select a checkout root with --worktree'
+  shared_git=$(git -C "$project_dir" rev-parse --path-format=absolute --git-common-dir)
+  shared_git=$(realpath -- "$shared_git")
+  helper_git=$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir)
+  [[ $(realpath -- "$helper_git") == "$shared_git" && ${shared_git##*/} == .git ]] || fail 'Selected checkout must share this wrapper repository and use an original checkout with .git'
+  shared_dir=$(dirname "$shared_git")
+  [[ $(git -C "$shared_dir" rev-parse --show-toplevel) == "$shared_dir" ]] || fail 'Original checkout is unavailable'
+  build_root=$project_dir/.local/scratch/macos-build
+  shared_root=$shared_dir/.local/scratch/macos-build
+  tools_dir=$shared_root/tools
+  cache_dir=$shared_root/cache
+  if [[ $print_paths == 1 ]]; then
+    printf 'Source checkout: %s\nShared checkout: %s\nShared tools: %s\nShared cache: %s\nBuild root: %s\nOutput root: %s\n' \
+      "$project_dir" "$shared_dir" "$tools_dir" "$cache_dir" "$build_root" "$project_dir/release/sandboxed-macos"
+    return
+  fi
+  [[ $(uname -s) == Darwin ]] || fail 'This build requires macOS.'
   local dependency
   for dependency in sandbox-exec realpath mktemp rsync xcode-select getconf; do
     require_command "$dependency" >/dev/null
@@ -118,8 +167,8 @@ main() {
   node_path=/usr/bin/false
   vp_path=/usr/bin/false
   cargo_path=/usr/bin/false
-  rustup_root=$project_dir/.local/scratch/macos-build/cache/rustup-unused
-  homebrew_prefix=$project_dir/.local/scratch/macos-build/cache/homebrew-unused
+  rustup_root=$cache_dir/rustup-unused
+  homebrew_prefix=$cache_dir/homebrew-unused
   if [[ $check == 0 ]]; then
     node_path=$(require_command node)
     node_path=$(realpath -- "$node_path")
@@ -148,14 +197,13 @@ main() {
 
   # These parents stay outside child write grants, including across runs.
   local bootstrap_path
-  for bootstrap_path in "$project_dir/.local" "$project_dir/.local/scratch" \
+  for bootstrap_path in "$shared_dir/.local" "$shared_dir/.local/scratch" "$shared_root" "$cache_dir" \
+    "$project_dir/.local" "$project_dir/.local/scratch" \
     "$project_dir/.local/scratch/macos-build" "$project_dir/.local/scratch/macos-build/runs" \
-    "$project_dir/.local/scratch/macos-build/cache" "$project_dir/.local/scratch/macos-build-probes" \
+    "$project_dir/.local/scratch/macos-build-probes" \
     "$project_dir/release" "$project_dir/release/sandboxed-macos"; do
     ensure_bootstrap_directory "$bootstrap_path"
   done
-  build_root=$project_dir/.local/scratch/macos-build
-  cache_dir=$build_root/cache
   # Create once without truncating a pre-existing file or following a symlink.
   local package_scope=$build_root/package.json
   if [[ -e $package_scope || -L $package_scope ]]; then
@@ -170,7 +218,7 @@ main() {
   run_dir=$(mktemp -d "$build_root/runs/run.XXXXXX")
   probe_dir=$(mktemp -d "$project_dir/.local/scratch/macos-build-probes/probe.XXXXXX")
   output_dir=$project_dir/release/sandboxed-macos/${run_dir##*/}
-  mkdir -- "$run_dir/home" "$run_dir/tmp" "$run_dir/source" "$output_dir"
+  mkdir -- "$run_dir/home" "$run_dir/tmp" "$run_dir/source" "$run_dir/runtime" "$output_dir"
   output_dir=$(realpath -- "$output_dir")
   # ASAR unpack globs skip hidden path components. Keep the data local while
   # giving packaging tools a non-hidden temporary path through a private alias.
@@ -184,6 +232,7 @@ main() {
   local -a sandbox_args=(
     -f "$script_dir/sandbox/desktop-build.sb"
     -D "BUILD_ROOT=$build_root" -D "RUN_DIR=$run_dir" -D "CACHE_DIR=$cache_dir" -D "OUTPUT_DIR=$output_dir"
+    -D "TOOLS_DIR=$tools_dir" -D "ALLOW_DOWNLOADS=$allow_downloads"
     -D "DEVELOPER_ROOT=$developer_root" -D "NODE_DIR=$(dirname "$node_path")"
     -D "VP_DIR=$(dirname "$vp_path")" -D "CARGO_BIN_DIR=$(dirname "$cargo_path")"
     -D "RUSTUP_HOME=$rustup_root" -D "HOMEBREW_PREFIX=$homebrew_prefix"
@@ -195,23 +244,28 @@ main() {
     'RUSTUP_AUTO_INSTALL=0' "DEVELOPER_DIR=$developer_dir"
     "XDG_CACHE_HOME=$cache_dir/xdg" "XDG_CONFIG_HOME=$run_dir/home/.config"
     "XDG_DATA_HOME=$run_dir/home/.local/share" "XDG_STATE_HOME=$run_dir/home/.local/state"
-    "XDG_RUNTIME_DIR=$cache_dir/runtime"
+    "XDG_RUNTIME_DIR=$run_dir/runtime"
     "npm_config_store_dir=$cache_dir/pnpm" "npm_config_cache=$cache_dir/npm"
     "pnpm_config_store_dir=$cache_dir/pnpm" "pnpm_config_cache_dir=$cache_dir/pnpm-cache"
     "GIT_CEILING_DIRECTORIES=$build_root"
+    "T3CODE_BUILD_OUTPUT=$output_dir" "T3CODE_BUILD_ARCH=$arch"
     "ELECTRON_CACHE=$cache_dir/electron" "ELECTRON_BUILDER_CACHE=$cache_dir/electron-builder"
+    'ELECTRON_SKIP_BINARY_DOWNLOAD=1' 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1'
     'CI=1' 'LANG=en_US.UTF-8' 'TERM=dumb' 'NO_COLOR=1'
   )
+  if [[ $allow_downloads == 0 ]]; then
+    build_env+=('npm_config_offline=true' 'pnpm_config_offline=true' 'CARGO_NET_OFFLINE=true')
+  fi
   if [[ -n ${RUSTUP_TOOLCHAIN:-} ]]; then
     build_env+=("RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN")
   fi
 
-  printf 'Build workspace: %s\nOutput: %s\nIsolation fixture: %s\nTemporary alias: %s\n' \
-    "$run_dir" "$output_dir" "$probe_dir" "$temp_alias_root/tmp"
+  printf 'Source checkout: %s\nShared cache: %s\nBuild workspace: %s\nOutput: %s\nIsolation fixture: %s\nTemporary alias: %s\n' \
+    "$project_dir" "$cache_dir" "$run_dir" "$output_dir" "$probe_dir" "$temp_alias_root/tmp"
   cd "$run_dir"
   # Cached descendants can contain child-created links. Resolve all writes in the sandbox.
   run_logged "$run_dir/setup.log" /bin/mkdir -p \
-    "$cache_dir/vp" "$cache_dir/pnpm" "$cache_dir/pnpm-cache" "$cache_dir/runtime" "$cache_dir/cargo" "$cache_dir/electron" \
+    "$cache_dir/vp" "$cache_dir/pnpm" "$cache_dir/pnpm-cache" "$cache_dir/cargo" "$cache_dir/electron" \
     "$cache_dir/electron-builder" "$cache_dir/xdg" "$cache_dir/npm"
   run_sandbox /bin/ln -s "$probe_dir/denied" "$run_dir/log-symlink"
   if run_logged "$run_dir/log-symlink" /bin/echo 'must not escape' >/dev/null 2>&1; then
@@ -267,19 +321,24 @@ main() {
   node_version=$(run_sandbox "$node_path" -e '
     const { readFileSync } = require("node:fs");
     const requiredVersion = JSON.parse(readFileSync("package.json", "utf8")).engines.node;
-    const requiredMajor = Number(requiredVersion.split(".")[0]);
-    if (Number(process.versions.node.split(".")[0]) !== requiredMajor) {
+    if (process.versions.node !== requiredVersion) {
       console.error("This checkout requires Node " + requiredVersion + ". Put a compatible Node on PATH before building.");
       process.exit(1);
     }
     process.stdout.write(process.versions.node);
   ')
   build_env+=("VP_NODE_VERSION=$node_version")
+  local electron_version electron_headers
+  electron_version=$(run_sandbox "$node_path" -p 'JSON.parse(require("node:fs").readFileSync("apps/desktop/package.json", "utf8")).dependencies.electron')
+  [[ $electron_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Electron must have a pinned version'
+  electron_headers=$cache_dir/electron/node-v$electron_version-headers.tar.gz
+  [[ -f $electron_headers && ! -L $electron_headers ]] || fail "Missing cached Electron headers: $electron_headers; obtain download approval before populating this cache"
+  build_env+=("npm_config_tarball=$electron_headers")
   run_logged "$run_dir/toolchain.log" cargo --version
   run_logged "$run_dir/toolchain.log" rustc --version
-  run_logged "$run_dir/install.log" "$vp_path" install --frozen-lockfile \
-    --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts... \
-    --filter=@t3tools/oxlint-plugin-t3code...
+  local -a install_args=(install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts... --filter=@t3tools/oxlint-plugin-t3code...)
+  if [[ $allow_downloads == 0 ]]; then install_args+=(--offline); fi
+  run_logged "$run_dir/install.log" "$vp_path" "${install_args[@]}"
   if [[ ${#command_args[@]} -gt 0 ]]; then
     run_logged "$run_dir/command.log" "${command_args[@]}"
   else

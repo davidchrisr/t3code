@@ -4,8 +4,9 @@
 
 (allow process* sysctl-read mach-lookup)
 (allow signal (target same-sandbox))
-(allow network*)
-(system-network)
+(if (equal? (param "ALLOW_DOWNLOADS") "1")
+  (begin (allow network*) (system-network))
+  (deny network*))
 (allow pseudo-tty)
 
 ; Keep host tools and the selected SDK readable, but never writable.
@@ -18,6 +19,7 @@
   (subpath (param "DEVELOPER_ROOT"))
   (subpath (param "NODE_DIR"))
   (subpath (param "VP_DIR"))
+  (subpath (param "TOOLS_DIR"))
   (subpath (param "CARGO_BIN_DIR"))
   (subpath (param "RUSTUP_HOME"))
   (subpath (string-append (param "HOMEBREW_PREFIX") "/Cellar"))

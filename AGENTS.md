@@ -78,7 +78,10 @@ The most common defect in this repo is a change that works on the path you teste
 ## Dev servers
 
 Read `.local/AGENTS.md` when present for machine-specific tooling access and
-development allocations.
+development allocations. In a linked worktree, also read the original checkout's
+`.local/AGENTS.md`; its root is the parent of
+`git rev-parse --path-format=absolute --git-common-dir`. Reference those shared
+instructions and helpers directly, using your own worktree as the source.
 
 - `vp i` installs. Worktrees get this from the t3.json setup script; if module resolution looks broken, it probably did not run.
 - Setup runs in the background. While `.t3/setup-running` names a live PID, wait for it and do not run `vp i`. It ends with `.t3/setup-done` or `.t3/setup-failed` (with the error tail). With no marker at all, setup never ran here, so run `vp i` yourself.
@@ -132,7 +135,9 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
   it("saves on Enter", async () => {
     const onSave = vi.fn();
     using _now = vi.spyOn(Date, "now").mockReturnValue(0);
-    await using screen = await render(<TitleEditor onSave={onSave} />, { router: "/threads/1" });
+    await using screen = await render(<TitleEditor onSave={onSave} />, {
+      router: "/threads/1",
+    });
     await userEvent.type(screen.getByRole("textbox"), "Title{Enter}");
     expect(onSave).toHaveBeenCalledWith("Title");
   });
