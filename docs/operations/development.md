@@ -59,26 +59,28 @@ Add `--browser` to open a browser automatically.
 
 ### Remote container development
 
-Read optional `.local/AGENTS.md` for runtime access, paths, and startup commands.
-Claim a task namespace by atomically creating its directory; if it exists, choose
-another name. Derive container, network, and application-image names from that
-namespace, and check live/stopped resources, ports, and subnets before startup.
+Read optional `.local/AGENTS.md` for the reusable setup commands and machine paths.
+Reuse compatible tooling and the existing stack when continuing a task. One shared
+local toolbox mounts selected checkouts at their real paths; run formatters,
+generators, and other source-changing tools there. Keep dependencies and outputs
+per checkout, and share package download caches. Install from the frozen lockfile
+only when dependency inputs change. Include `@t3tools/scripts` for the dev runner
+and `@t3tools/oxlint-plugin-t3code` for linting.
 
-Use one canonical checkout or authorized Git worktree, remote source directory,
-and stack per independent task. Verify your source mount before synchronization.
-Container-local `/workspace` paths can repeat with distinct source mounts.
+For remote execution, sync source one way into the task's mirror. Mount it
+read-only, with separate writable dependencies, generated outputs, caches, and
+application state. Exclude Git metadata, credentials, dependencies, and outputs
+from transfers; never copy remote source edits back. Source sync triggers the
+backend watcher and web reloads. Dependency, environment, and image changes need
+the documented install or restart step.
 
-Keep installed dependencies, outputs, state, and networks task-local. Share package
-download caches and immutable toolbox images; give images containing task source
-their own tags. Synchronize scoped edits from the canonical checkout, preserving
-ignored files and evidence. Copy generated source changes back explicitly.
-
-Install with the frozen lockfile, including `@t3tools/scripts` for the dev runner
-and `@t3tools/oxlint-plugin-t3code` for linting. Publish only the web process, using
-the [single-origin proxy configuration](#sharing-and-remote-debugging). Source sync
-triggers web reloads and the backend watcher; dependency, environment, and image
-changes require installation or restart. Serialize heavy checks within the host's
-memory budget.
+Claim new namespaces with atomic directory creation. Give independent stacks
+separate images, source directories, data, and networks; create worktrees only
+when requested. Reserve published host ports in stack configuration, including
+stopped stacks, and check live resources and routes. Serialize port selection;
+on collision, update the configuration and URLs and retry at most twice. Publish
+only web through the [single-origin proxy](#sharing-and-remote-debugging).
+Serialize heavy checks within the host's memory budget.
 
 Use [test-t3-app](../../.agents/skills/test-t3-app/SKILL.md) for integrated web and
 desktop verification, and [test-t3-mobile](../../.agents/skills/test-t3-mobile/SKILL.md)
