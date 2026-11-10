@@ -34,6 +34,7 @@ import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerD
 import { capturePreviewAnnotationScreenshot } from "~/lib/previewAnnotation";
 import { ensureLocalApi } from "~/localApi";
 import { getClientSettings } from "~/hooks/useSettings";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import {
   rememberPreviewUrl,
   updatePreviewServerSnapshot,
@@ -146,6 +147,7 @@ export function PreviewView({
   visible,
   onSendAnnotation,
 }: Props) {
+  const isMobileViewport = useMediaQuery("max-sm");
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const [pickActive, setPickActive] = useState(false);
   const canSendAnnotation =
@@ -892,7 +894,9 @@ export function PreviewView({
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onPictureInPicture={
-          tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
+          !isMobileViewport && tabId && (isServerTab || previewBridge)
+            ? handlePictureInPicture
+            : undefined
         }
         pictureInPicture={miniPlayerTabId === tabId}
         pictureInPictureDisabled={
