@@ -79,6 +79,8 @@ import {
 import { readLocalApi } from "~/localApi";
 import { confirmTerminalClose } from "~/lib/terminalCloseConfirm";
 import { useClientSettings } from "../hooks/useSettings";
+import { useSoftwareKeyboardOpen } from "../hooks/useSoftwareKeyboardOpen";
+import { KeyboardShortcutBar, type KeyboardShortcutAction } from "./KeyboardShortcutBar";
 import { getFileMetadataQueryAtom } from "../hooks/useFileMetadata";
 import { FileMetadataThreadContext } from "../hooks/FileMetadataThreadProvider";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -566,6 +568,8 @@ function TerminalSessionViewport({
   const containerRef = useRef<HTMLDivElement>(null);
   const autoFocusedRef = useRef(false);
   const terminalRef = useRef<GhosttyTerminalSurface | null>(null);
+  const isSoftwareKeyboardOpen = useSoftwareKeyboardOpen();
+  const [isTerminalFocused, setIsTerminalFocused] = useState(false);
   const visibleRef = useRef(visible);
   const environmentId = threadRef.environmentId;
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -1250,12 +1254,46 @@ function TerminalSessionViewport({
       containerRef.current = null;
     };
   };
+  const onKeyboardAction = (action: KeyboardShortcutAction) => {
+    const terminal = terminalRef.current;
+    if (!terminal || !readEnvironmentScope(environmentId, AuthTerminalOperateScope)) return;
+    terminal.focus();
+    const key =
+      action === "tab"
+        ? "Tab"
+        : action === "left"
+          ? "ArrowLeft"
+          : action === "right"
+            ? "ArrowRight"
+            : action;
+    for (const type of ["keydown", "keyup"]) {
+      terminal.input.dispatchEvent(
+        new KeyboardEvent(type, { key, bubbles: true, cancelable: true }),
+      );
+    }
+  };
+
   return (
     <div
-      ref={attachContainer}
-      tabIndex={-1}
-      className="relative h-full w-full overflow-hidden bg-(--terminal-background)"
-    />
+      className="relative flex h-full w-full flex-col overflow-hidden bg-(--terminal-background)"
+      onFocusCapture={() => setIsTerminalFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setIsTerminalFocused(false);
+      }}
+    >
+      <div
+        ref={attachContainer}
+        tabIndex={-1}
+        className="relative min-h-0 w-full flex-1 overflow-hidden"
+      />
+      {visible && isSoftwareKeyboardOpen && isTerminalFocused && (
+        <KeyboardShortcutBar
+          context="terminal"
+          disabled={!canOperateTerminal}
+          onAction={onKeyboardAction}
+        />
+      )}
+    </div>
   );
 }
 

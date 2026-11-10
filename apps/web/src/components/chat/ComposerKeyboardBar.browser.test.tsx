@@ -42,7 +42,6 @@ function Composer({
       <ComposerKeyboardBar
         disabled={disabled}
         onAction={(action) => editorRef.current?.runKeyboardAction(action)}
-        onHideKeyboard={() => {}}
       />
     </>
   );
@@ -55,6 +54,8 @@ function editorIn(container: HTMLElement): Editor {
 }
 
 it.each([
+  { symbol: "\t", label: "Tab", richTextEnabled: true },
+  { symbol: "\t", label: "Tab", richTextEnabled: false },
   { symbol: "$", label: "Insert $ for skills", richTextEnabled: true },
   { symbol: "/", label: "Insert / for commands", richTextEnabled: true },
   { symbol: "`", label: "Insert backtick", richTextEnabled: true },
@@ -119,6 +120,22 @@ it("uses the editor's backtick wrapping for a text selection", async () => {
   await userEvent.click(page.getByRole("button", { name: "Insert backtick" }));
 
   await vi.waitFor(() => expect(serializeEditorDoc(editor.state.doc).value).toBe("`code`"));
+});
+
+it("uses the editor's code block indentation for Tab", async () => {
+  await using screen = await render(<Composer initialValue={"```ts\ncode\n```"} />);
+  const editor = editorIn(screen.container);
+  await act(() => {
+    editor.commands.setTextSelection(1);
+    editor.view.focus();
+  });
+
+  await userEvent.click(page.getByRole("button", { name: "Tab", exact: true }));
+
+  await vi.waitFor(() => {
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("```ts\n  code\n```");
+    expect(document.activeElement).toBe(editor.view.dom);
+  });
 });
 
 it("moves across an entire emoji in both directions", async () => {

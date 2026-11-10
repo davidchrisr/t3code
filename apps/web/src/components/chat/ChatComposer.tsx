@@ -2124,7 +2124,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setIsComposerFocused(false);
     setIsComposerEditorFocused(false);
   };
-  const blurMobileComposerStable = useStableCallback(blurMobileComposer);
 
   const onComposerKeyboardAction = (action: ComposerKeyboardAction) => {
     composerEditorRef.current?.runKeyboardAction(action);
@@ -3731,7 +3730,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             <ComposerKeyboardBar
               disabled={isComposerEditorDisabled}
               onAction={onComposerKeyboardActionStable}
-              onHideKeyboard={blurMobileComposerStable}
             />
           )}
         </ComposerSurface.Main>

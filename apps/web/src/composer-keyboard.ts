@@ -1,8 +1,9 @@
 import { redo, undo } from "@tiptap/pm/history";
 import { TextSelection, type EditorState } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
+import type { KeyboardShortcutAction } from "./components/KeyboardShortcutBar";
 
-export type ComposerKeyboardAction = "$" | "/" | "`" | "left" | "right" | "undo" | "redo";
+export type ComposerKeyboardAction = KeyboardShortcutAction | "undo" | "redo";
 
 export function composerKeyboardSelectionTransaction(
   state: EditorState,
@@ -21,6 +22,17 @@ export function runComposerKeyboardAction(view: EditorView, action: ComposerKeyb
   if (action === "undo" || action === "redo") {
     const command = action === "undo" ? undo : redo;
     command(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
+    return;
+  }
+  if (action === "tab") {
+    const event = new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    view.dom.dispatchEvent(event);
+    if (!event.defaultPrevented) view.dispatch(view.state.tr.insertText("\t").scrollIntoView());
     return;
   }
   if (action === "$" || action === "/" || action === "`") {
