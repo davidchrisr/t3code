@@ -1923,7 +1923,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadRef &&
     activePreviewMiniPlayer &&
     previewMiniPlayerVisible &&
-    (activePreviewMiniPlayer.source.kind === "device" || canOperatePreview)
+    (activePreviewMiniPlayer.source.kind === "device" || (!isMobileViewport && canOperatePreview))
       ? activePreviewMiniPlayer
       : null;
   const canvasPreview = useThreadPreviewCanvasSource(activeThreadRef, shownPreviewMiniPlayer);
