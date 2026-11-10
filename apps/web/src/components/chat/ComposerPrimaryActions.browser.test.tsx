@@ -31,8 +31,6 @@ it("submits once without moving editor focus when compatibility mouse events fol
         pendingAction={null}
         isRunning={false}
         canInterrupt={false}
-        showPlanFollowUpPrompt={false}
-        promptHasText
         isSendBusy={false}
         sendDisabledReason={null}
         isEnvironmentUnavailable={false}
@@ -41,7 +39,6 @@ it("submits once without moving editor focus when compatibility mouse events fol
         preserveComposerFocusOnPointerDown
         onPreviousPendingQuestion={() => {}}
         onInterrupt={() => {}}
-        onImplementPlanInNewThread={() => {}}
       />
     </form>,
   );
