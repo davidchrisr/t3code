@@ -449,6 +449,28 @@ async function findPackageRoot(
   let current = NodePath.dirname(resolvedPath);
   const root = NodePath.parse(current).root;
 
+  // Nested entry-point manifests belong to the enclosing installed package, including aliases.
+  for (let installedRoot = current; installedRoot !== root;) {
+    const parent = NodePath.dirname(installedRoot);
+    if (
+      NodePath.basename(parent) === "node_modules" ||
+      (NodePath.basename(parent).startsWith("@") &&
+        NodePath.basename(NodePath.dirname(parent)) === "node_modules")
+    ) {
+      try {
+        const packageJson = await readPackageJson(NodePath.join(installedRoot, "package.json"));
+        return typeof packageJson.name === "string"
+          ? { packageJson, packageRoot: await NodeFSP.realpath(installedRoot) }
+          : null;
+      } catch (error) {
+        const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+        return null;
+      }
+    }
+    installedRoot = parent;
+  }
+
   while (current !== root) {
     const packageJsonPath = NodePath.join(current, "package.json");
     try {
@@ -473,6 +495,23 @@ async function resolveDependencyPackage(
   dependencyName: string,
   fromPackageJsonPath: string,
 ): Promise<{ readonly packageJson: PackageJson; readonly packageRoot: string } | null> {
+  let current = NodePath.dirname(fromPackageJsonPath);
+  const root = NodePath.parse(current).root;
+  while (true) {
+    const packageRoot = NodePath.join(current, "node_modules", dependencyName);
+    try {
+      const packageJson = await readPackageJson(NodePath.join(packageRoot, "package.json"));
+      if (typeof packageJson.name === "string") {
+        return { packageJson, packageRoot: await NodeFSP.realpath(packageRoot) };
+      }
+    } catch (error) {
+      const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
+    if (current === root) break;
+    current = NodePath.dirname(current);
+  }
+
   const requireFromPackage = NodeModule.createRequire(fromPackageJsonPath);
   const candidates = [`${dependencyName}/package.json`, dependencyName];
   for (const candidate of candidates) {
@@ -486,22 +525,6 @@ async function resolveDependencyPackage(
     }
   }
 
-  let current = NodePath.dirname(fromPackageJsonPath);
-  const root = NodePath.parse(current).root;
-  while (true) {
-    const packageRoot = NodePath.join(current, "node_modules", dependencyName);
-    try {
-      const packageJson = await readPackageJson(NodePath.join(packageRoot, "package.json"));
-      if (packageJson.name === dependencyName) {
-        return { packageJson, packageRoot: await NodeFSP.realpath(packageRoot) };
-      }
-    } catch (error) {
-      const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-    if (current === root) break;
-    current = NodePath.dirname(current);
-  }
   return null;
 }
 

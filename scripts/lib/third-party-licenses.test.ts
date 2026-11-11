@@ -131,9 +131,30 @@ describe("third-party license generation", () => {
 
   it("collects production packages and custom asset notices", async () => {
     const fixture = await createFixture();
+    const workspace = NodePath.join(fixture.root, "node_modules", "@t3tools", "fixture");
+    await writeJson(fixture.appManifest, {
+      name: "fixture-app",
+      dependencies: { "@t3tools/fixture": "workspace:*" },
+    });
+    await writeJson(NodePath.join(workspace, "package.json"), {
+      name: "@t3tools/fixture",
+      main: "index.js",
+      dependencies: { "demo-dependency": "1.2.3" },
+    });
+    await NodeFSP.writeFile(NodePath.join(workspace, "index.js"), "export {};\n", "utf8");
+    const bundledModuleIds: string[] = [];
+    for (const name of ["jsx-runtime", "preact-hooks"]) {
+      const nestedRoot = NodePath.join(fixture.dependencyRoot, name);
+      await writeJson(NodePath.join(nestedRoot, "package.json"), { name, main: "index.js" });
+      const modulePath = NodePath.join(nestedRoot, "index.js");
+      await NodeFSP.writeFile(modulePath, "export {};\n", "utf8");
+      bundledModuleIds.push(modulePath);
+    }
     const manifest = await generateThirdPartyLicenseManifest({
       configFile: fixture.configFile,
       packageManifests: [{ bundle: "web", path: fixture.appManifest }],
+      bundledModuleIds,
+      bundleName: "web",
     });
 
     expect(manifest).toEqual({
@@ -195,22 +216,98 @@ describe("third-party license generation", () => {
     );
   });
 
-  it("finds packages whose exports hide both their manifest and entry point", async () => {
-    const fixture = await createFixture();
-    await writeJson(NodePath.join(fixture.dependencyRoot, "package.json"), {
+  it.each([
+    {
+      label: "hidden manifest and entry point",
       name: "demo-dependency",
-      version: "1.2.3",
-      license: "MIT",
+      specifier: "1.2.3",
       exports: {},
+    },
+    {
+      label: "declared alias with an exported manifest",
+      name: "@example/forked-dependency",
+      specifier: "npm:@example/forked-dependency@1.2.3",
+      exports: { ".": "./index.js", "./package.json": "./package.json" },
+    },
+    {
+      label: "overridden alias with a hidden manifest",
+      name: "@example/forked-dependency",
+      specifier: "1.2.3",
+      exports: { ".": "./index.js" },
+    },
+    {
+      label: "overridden alias with a hidden manifest and entry point",
+      name: "@example/forked-dependency",
+      specifier: "1.2.3",
+      exports: {},
+    },
+    {
+      label: "alias with a versioned nested entry manifest",
+      name: "@example/forked-dependency",
+      specifier: "npm:@example/forked-dependency@1.2.3",
+      exports: { ".": "./nested/index.js" },
+      nestedVersion: "9.0.0",
+    },
+    {
+      label: "versionless alias target below a versioned application",
+      name: "@example/workspace-dependency",
+      specifier: "workspace:@example/workspace-dependency@*",
+      exports: { ".": "./index.js" },
+      version: undefined,
+    },
+  ])("finds production package notices for $label", async (input) => {
+    const { name, specifier, exports } = input;
+    const version = "version" in input ? input.version : "1.2.3";
+    const fixture = await createFixture();
+    await writeJson(fixture.appManifest, {
+      name: "fixture-app",
+      version: "4.5.6",
+      dependencies: { "demo-dependency": specifier },
+    });
+    await writeJson(NodePath.join(fixture.dependencyRoot, "package.json"), {
+      name,
+      version,
+      license: "MIT",
+      exports,
       repository: "example/demo-dependency",
     });
+    if ("nestedVersion" in input) {
+      const nestedRoot = NodePath.join(fixture.dependencyRoot, "nested");
+      await writeJson(NodePath.join(nestedRoot, "package.json"), {
+        name: "nested-entry",
+        version: input.nestedVersion,
+        license: "Apache-2.0",
+      });
+      await NodeFSP.writeFile(NodePath.join(nestedRoot, "index.js"), "export {};\n", "utf8");
+    }
+    if (version === undefined) {
+      const workspaceRoot = NodePath.join(fixture.root, "workspace-package");
+      await NodeFSP.rename(fixture.dependencyRoot, workspaceRoot);
+      await NodeFSP.symlink(workspaceRoot, fixture.dependencyRoot, "junction");
+    }
 
     const manifest = await generateThirdPartyLicenseManifest({
       configFile: fixture.configFile,
       packageManifests: [{ bundle: "web", path: fixture.appManifest }],
+      ...("nestedVersion" in input
+        ? {
+            bundledModuleIds: [NodePath.join(fixture.dependencyRoot, "nested", "index.js")],
+            bundleName: "web",
+          }
+        : {}),
     });
 
-    expect(manifest.entries.some((entry) => entry.name === "demo-dependency")).toBe(true);
+    expect(manifest.entries.filter((entry) => entry.kind === "package")).toEqual([
+      {
+        bundles: ["web"],
+        kind: "package",
+        license: "MIT",
+        name,
+        noticeText: "Demo MIT license text",
+        sourceUrl: "https://github.com/example/demo-dependency",
+        version: version ?? "unknown",
+      },
+    ]);
   });
 
   it("leaves type-only packages out of the notices but still walks their dependencies", async () => {
