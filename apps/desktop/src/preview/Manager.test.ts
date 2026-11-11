@@ -1680,7 +1680,10 @@ describe("PreviewManager", () => {
         const host = yield* DesktopBrowserHost.DesktopBrowserHost;
         const serverTab = { threadId: "thread-1", tabId: "server-tab-registration" };
         const guest = makeAttachingGuest(49);
-        Object.assign(guest.wc, { hostWebContents: { id: 7 } });
+        Object.assign(guest.wc, {
+          hostWebContents: { id: 7 },
+          isLoadingMainFrame: () => false,
+        });
         fromId.mockReturnValue(guest.wc);
         const initializationStarted = Promise.withResolvers<void>();
         const continueInitialization = Promise.withResolvers<void>();

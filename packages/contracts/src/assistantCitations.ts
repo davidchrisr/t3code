@@ -4,6 +4,8 @@ import { EnvironmentId, MessageId, NonNegativeInt, ThreadId } from "./baseSchema
 export const ASSISTANT_CITATION_MAX_TEXT_LENGTH = 8_000;
 export const ASSISTANT_CITATION_MAX_COMMENT_LENGTH = 8_000;
 export const ASSISTANT_CITATION_CONTEXT_LENGTH = 32;
+// Provider message IDs nest and re-encode their thread and turn IDs, so they outgrow a few hundred characters.
+export const ASSISTANT_CITATION_MAX_ID_LENGTH = 4_096;
 
 /** Positions are UTF-16 offsets, not Markdown offsets. */
 const citationTextFields = {
@@ -19,8 +21,8 @@ const citationTextFields = {
 
 const citationFields = {
   ...citationTextFields,
-  environmentId: EnvironmentId.check(Schema.isMaxLength(512)),
-  threadId: ThreadId.check(Schema.isMaxLength(512)),
+  environmentId: EnvironmentId.check(Schema.isMaxLength(ASSISTANT_CITATION_MAX_ID_LENGTH)),
+  threadId: ThreadId.check(Schema.isMaxLength(ASSISTANT_CITATION_MAX_ID_LENGTH)),
   comment: Schema.optional(
     Schema.String.check(Schema.isMaxLength(ASSISTANT_CITATION_MAX_COMMENT_LENGTH)),
   ),
@@ -46,7 +48,7 @@ export const AssistantCitation = Schema.Union([
   Schema.Struct({
     ...citationFields,
     version: Schema.Literal(1),
-    messageId: MessageId.check(Schema.isMaxLength(512)),
+    messageId: MessageId.check(Schema.isMaxLength(ASSISTANT_CITATION_MAX_ID_LENGTH)),
   }),
   Schema.Struct({
     ...citationFields,
