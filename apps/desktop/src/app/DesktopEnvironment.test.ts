@@ -47,6 +47,15 @@ describe("DesktopEnvironment", () => {
         assert.equal(environment.branding.baseName, "T3 Code");
         assert.equal(environment.baseDir, "/Users/alice/.t3");
         assert.equal(environment.stateDir, "/Users/alice/.t3/userdata");
+        for (const [env, expectedHome] of [
+          [{ T3CODE_HOME: "/recovery" }, "/Users/alice/.t3"],
+          [{ T3CODE_HOME: "/recovery", T3FORK_HOME: " /fork " }, "/fork"],
+          [{ T3CODE_HOME: "/recovery", T3FORK_HOME: "  " }, "/Users/alice/.t3"],
+        ] as const) {
+          const isolated = yield* makeEnvironment({ isPackaged: true }, env);
+          assert.equal(isolated.baseDir, expectedHome);
+          assert.equal(isolated.stateDir, `${expectedHome}/userdata`);
+        }
       }),
   );
 

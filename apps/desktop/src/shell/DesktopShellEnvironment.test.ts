@@ -153,7 +153,10 @@ function runShellEnvironment(input: {
   return Effect.acquireUseRelease(
     Effect.sync(() =>
       vi.spyOn(NodeOS, "userInfo").mockReturnValue({
-        ...NodeOS.userInfo(),
+        username: "test-user",
+        uid: 1000,
+        gid: 1000,
+        homedir: "/test-home",
         shell: input.userShell ?? null,
       }),
     ),

@@ -1,9 +1,45 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
+import * as HttpClient from "effect/http/HttpClient";
 
-import { RelayClientTracer, withLocalTracing, withRelayClientTracing } from "./relayTracing.ts";
+import {
+  layer,
+  RelayClientTracer,
+  withLocalTracing,
+  withRelayClientTracing,
+} from "./relayTracing.ts";
+
+it.effect("does not install a relay exporter even with valid ingest credentials", () =>
+  Effect.gen(function* () {
+    expect(Option.isNone(yield* RelayClientTracer)).toBe(true);
+  }).pipe(
+    Effect.provide(
+      layer(
+        {
+          tracesUrl: "https://ingest.example.test/v1/traces",
+          tracesDataset: "relay",
+          tracesToken: "test-token",
+        },
+        {
+          serviceName: "t3code-test",
+          runtime: "node",
+          serviceInstanceId: "test-instance",
+          client: "test",
+        },
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("Unexpected upstream telemetry request")),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
 
 function collectingTracer(spans: Array<string>): Tracer.Tracer {
   return Tracer.make({

@@ -35,7 +35,7 @@ const writeShim = (root: string, target: CliShimTarget) => {
 const run = (shim: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv = {}) =>
   NodeChildProcess.spawnSync(shim, args, {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, ...env },
+    env: { PATH: process.env.PATH, TMPDIR: NodeOS.tmpdir(), ...env },
   });
 
 const REPORTER =
@@ -82,7 +82,14 @@ describe("renderCliShim", () => {
       entry: "/bin.mjs",
     });
     expect(run(shim, []).stdout).toContain(`home=${root}/home`);
-    expect(run(shim, [], { T3CODE_HOME: "/elsewhere" }).stdout).toContain("home=/elsewhere");
+    for (const [env, expectedHome] of [
+      [{ T3CODE_HOME: "/recovery" }, `${root}/home`],
+      [{ T3FORK_HOME: "/elsewhere" }, "/elsewhere"],
+      [{ T3CODE_HOME: "/recovery", T3FORK_HOME: "/fork's home" }, "/fork's home"],
+      [{ T3CODE_HOME: "/recovery", T3FORK_HOME: "" }, `${root}/home`],
+    ] as const) {
+      expect(run(shim, [], env).stdout).toContain(`home=${expectedHome}`);
+    }
     const relative = NodeChildProcess.spawnSync("./bin/t3", [], { cwd: root, encoding: "utf8" });
     expect(relative.stdout).toContain(`cli=${shim}`);
   });
@@ -122,5 +129,7 @@ describe("renderCliShim", () => {
     );
     expect(bare).toEqual([]);
     expect(lines).toContain('set "T3CODE_CLI_PATH=C:\\Users\\José\\.t3\\bin\\t3.cmd"');
+    expect(lines).toContain('set "T3CODE_HOME=%T3FORK_HOME%"');
+    expect(lines).toContain('if not defined T3CODE_HOME set "T3CODE_HOME=C:\\Users\\José\\.t3"');
   });
 });

@@ -45,7 +45,6 @@ import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 
 it.effect.each([
   "disabled-codex",
@@ -60,6 +59,8 @@ it.effect.each([
         scenario === "disabled-default" ? "custom" : "codex",
       );
       const events: ServerLifecycleStreamEvent[] = [];
+      const pairingUrlIssued = yield* Deferred.make<void>();
+      let startupCountQueries = 0;
       const recovery = {
         terminalizedRuns: 0,
         stoppedSessions: 0,
@@ -176,7 +177,10 @@ it.effect.each([
                 }),
         }),
         Layer.mock(ThreadManagement.ThreadManagementService)({
-          countThreads: () => Effect.succeed(0),
+          countThreads: () => {
+            startupCountQueries += 1;
+            return Effect.succeed(0);
+          },
           listActiveShellIndex: () => Effect.succeed([]),
         }),
         Layer.mock(ThreadLaunch.ThreadLaunchService)({
@@ -204,11 +208,12 @@ it.effect.each([
           prepareTrial: Effect.undefined,
         }),
         Layer.mock(GitVcsDriver.GitVcsDriver)({}),
-        Layer.mock(AnalyticsService.AnalyticsService)({}),
-        // No provider logins or Connect link, so startup records no owners.
         FileSystem.layerNoop({}),
         Layer.mock(ServerSecretStore.ServerSecretStore)({ get: () => Effect.succeedNone }),
-        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+          issueStartupPairingUrl: (baseUrl) =>
+            Deferred.succeed(pairingUrlIssued, undefined).pipe(Effect.as(baseUrl)),
+        }),
         Layer.mock(ExternalLauncher.ExternalLauncher)({}),
         Layer.mock(HttpServer.HttpServer)({
           address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 3773),
@@ -219,6 +224,10 @@ it.effect.each([
         yield* startup.markHttpListening;
         const ready = yield* Effect.exit(startup.awaitCommandReady);
         assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
+        if (Exit.isSuccess(ready)) {
+          yield* Deferred.await(pairingUrlIssued);
+        }
+        assert.equal(startupCountQueries, 0);
         const welcome = events.find((event) => event.type === "welcome");
         if (scenario === "project-failure") {
           assert.isUndefined(welcome);
@@ -231,7 +240,7 @@ it.effect.each([
         }
       }).pipe(
         Effect.provide(ServerRuntimeStartup.layerWithOptions().pipe(Layer.provide(dependencies))),
-        Effect.provideService(ServerActivation, Effect.never),
+        Effect.provideService(ServerActivation, Effect.void),
       );
     }),
   ),

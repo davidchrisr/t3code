@@ -9,7 +9,6 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import { hashTelemetryId } from "@t3tools/shared/telemetryId";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
@@ -294,11 +293,6 @@ export const getTelemetryIdentityForHome = Effect.fn("getTelemetryIdentityForHom
   };
 });
 
-export const getTelemetryIdentity = Effect.flatMap(
-  HostProcess.HomeDirectory,
-  getTelemetryIdentityForHome,
-);
-
 /**
  * Owners the server can read without a client: the linked T3 Connect account
  * and the provider logins under `homeDirectory`. Clients add `connect` and
@@ -337,5 +331,3 @@ export const getServerOwnersForHome = Effect.fn("getServerOwnersForHome")(functi
       : [],
   );
 });
-
-export const getServerOwners = Effect.flatMap(HostProcess.HomeDirectory, getServerOwnersForHome);

@@ -2,8 +2,9 @@ import "vite-plus/test/config";
 import { defaultInclude, defineConfig } from "vite-plus";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
-import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { loadRepoEnv, removeClientTracingEnv } from "../../scripts/lib/public-config.ts";
 
+removeClientTracingEnv(process.env);
 const repoEnv = loadRepoEnv();
 
 // Install only bundle externals; the server bundle already carries its dependency tree.

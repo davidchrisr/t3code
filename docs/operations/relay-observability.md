@@ -2,6 +2,10 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
+This page describes relay infrastructure and its diagnostic receivers. Fork
+clients do not publish upstream relay diagnostics or mobile crash reports; the
+receivers remain relevant to upstream clients and infrastructure operations.
+
 The relay Alchemy stack owns a shared Axiom trace setup:
 
 - `t3-code-relay-traces-prod`, the OpenTelemetry trace dataset shared by the Worker, mobile app, and
@@ -168,13 +172,14 @@ usual cause.
 
 ## Mobile crashes and errors
 
-The mobile app reports through [`expo-observe`](https://docs.expo.dev/eas/observe/). Its
-`endpointUrl` points at the relay (`/v1/mobile/observe`, set in `apps/mobile/app.config.ts` from
-`T3CODE_RELAY_URL`), because Observe cannot send auth headers and prefixes every path with the EAS
-project id. The relay forwards each request to Axiom with its own token: logs (JavaScript errors,
-native crashes, log events) to `t3-code-mobile-logs-*`, metrics to `t3-code-mobile-metrics-*`, and
-spans to the shared traces dataset. Expo's Observe dashboard receives nothing. The endpoint URL is
-compiled into the native app, so pointing it elsewhere takes a store build.
+The relay accepts [`expo-observe`](https://docs.expo.dev/eas/observe/) requests at
+`/v1/mobile/observe`. Observe cannot send auth headers and prefixes paths with the
+EAS project id. The relay forwards logs, metrics, and spans to the corresponding
+Axiom datasets; Expo's Observe dashboard receives nothing.
+
+Fork mobile builds disable dispatch and compile a non-resolving
+`https://observe.invalid` endpoint. They do not use this receiver. Changing a
+compiled native endpoint requires a new native build.
 
 Hermes stacks from release builds are minified bytecode offsets. On the way through, the relay
 rewrites each JavaScript exception's `exception.stacktrace` with the bundle's source map from R2

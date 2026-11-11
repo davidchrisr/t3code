@@ -93,7 +93,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("turns product analytics off unless the developer opts in", () =>
+    it.effect("does not forward obsolete product analytics consent", () =>
       Effect.gen(function* () {
         const input = {
           mode: "dev",
@@ -113,8 +113,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { T3CODE_TELEMETRY_ENABLED: "true" },
         });
 
-        assert.equal(byDefault.T3CODE_TELEMETRY_ENABLED, "false");
-        assert.equal(optedIn.T3CODE_TELEMETRY_ENABLED, "true");
+        assert.equal(byDefault.T3CODE_TELEMETRY_ENABLED, undefined);
+        assert.equal(optedIn.T3CODE_TELEMETRY_ENABLED, undefined);
       }),
     );
 
@@ -409,6 +409,20 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_HOME, undefined);
+        const desktop = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: { T3CODE_HOME: "/recovery", T3FORK_HOME: "/live-fork" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: "/isolated-dev",
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+        assert.equal(desktop.T3FORK_HOME, "/isolated-dev");
       }),
     );
 
@@ -657,6 +671,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         readonly t3Home: string | undefined;
         readonly cwd: string;
         readonly ambientHome: string | undefined;
+        readonly ambientForkHome?: string;
+        readonly mode?: "dev:server" | "dev:desktop";
       }) =>
         Effect.gen(function* () {
           let captured: Record<string, string | undefined> | undefined;
@@ -672,19 +688,23 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             }),
           );
 
-          yield* runDevRunnerWithInput({ ...devServerInput, t3Home: input.t3Home }).pipe(
+          yield* runDevRunnerWithInput({
+            ...devServerInput,
+            mode: input.mode ?? devServerInput.mode,
+            t3Home: input.t3Home,
+          }).pipe(
             Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
             Effect.provideService(HostProcess.Platform, "linux"),
             Effect.provideService(HostProcess.WorkingDirectory, input.cwd),
             // No ~/.t3 here, so these runs never seed from this machine's install.
             Effect.provideService(HostProcess.HomeDirectory, input.cwd),
-            Effect.provideService(
-              HostProcess.Environment,
-              input.ambientHome === undefined ? {} : { T3CODE_HOME: input.ambientHome },
-            ),
+            Effect.provideService(HostProcess.Environment, {
+              T3CODE_HOME: input.ambientHome,
+              T3FORK_HOME: input.ambientForkHome,
+            }),
           );
 
-          return captured?.T3CODE_HOME;
+          return input.mode === "dev:desktop" ? captured?.T3FORK_HOME : captured?.T3CODE_HOME;
         });
 
       it.effect("prefers an explicit --home-dir over the worktree default", () =>
@@ -856,6 +876,23 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             ambientHome: "/home/user/.t3",
           });
           assert.equal(home, path.resolve("/home/user/.t3"));
+          const desktopHome = yield* spawnedHome({
+            t3Home: undefined,
+            cwd: NodeOS.tmpdir(),
+            ambientHome: "/recovery",
+            ambientForkHome: "/fork",
+            mode: "dev:desktop",
+          });
+          assert.equal(desktopHome, path.resolve("/fork"));
+          assert.equal(
+            yield* spawnedHome({
+              t3Home: undefined,
+              cwd: NodeOS.tmpdir(),
+              ambientHome: "/recovery",
+              mode: "dev:desktop",
+            }),
+            undefined,
+          );
         }),
       );
     });

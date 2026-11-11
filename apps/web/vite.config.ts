@@ -18,15 +18,14 @@ import {
   DEV_PROXIED_PATH_PREFIXES,
 } from "@t3tools/shared/devProxy";
 
-import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { applyRepoEnv, clientTracingDisabledPlugin } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
 
-const repoEnv = loadRepoEnv();
-Object.assign(process.env, repoEnv);
+const repoEnv = applyRepoEnv();
 
-// Signal single-origin dev explicitly; loadRepoEnv can restore deleted URL keys from .env.
+// Signal single-origin dev explicitly; loading repo env can restore deleted URL keys from .env.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 
 const port = Number(process.env.PORT ?? 5733);
@@ -266,6 +265,7 @@ export default defineConfig(() => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      clientTracingDisabledPlugin,
       devCompressionPlugin(),
       chunkCycleGuardPlugin(),
       builtDev

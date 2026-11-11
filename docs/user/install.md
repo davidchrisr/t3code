@@ -70,6 +70,17 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
+Fork desktop builds use `T3FORK_HOME` for their data directory and ignore
+`T3CODE_HOME`. The default remains `~/.t3`; the fork's bundled `t3` command uses
+the same directory. To run an upstream recovery app alongside the fork, give
+upstream a separate `T3CODE_HOME`, such as `~/.t3-recovery`, and keep
+`T3FORK_HOME` pointed at your existing fork data. Restart each app after changing
+these variables, and keep the directories separate.
+
+On macOS, use launchd environment settings or a launcher that supplies the variables;
+Finder and Dock launches do not inherit shell-profile changes. Install the shared
+`t3` command from only the app you want to own it.
+
 Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
 or use a package manager:
 
