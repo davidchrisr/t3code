@@ -916,6 +916,10 @@ describe("DesktopBackendConfiguration", () => {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.bootstrap.resourceMonitorPath, monitorPath);
+        assert.equal(
+          config.bootstrap.previewBrowserDirectory,
+          path.join(resourcesPath, "chrome-headless-shell", yield* HostProcess.Architecture),
+        );
         assert.equal(config.bootstrap.desktopTelemetryFd, 4);
         assert.equal(config.bootstrap.desktopTelemetryControlFd, 5);
       }).pipe(

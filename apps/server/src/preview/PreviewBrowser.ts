@@ -75,7 +75,7 @@ export interface PreviewBrowserRelease {
   readonly sha256: string;
 }
 
-const previewBrowserRelease = (
+export const previewBrowserRelease = (
   platform: NodeJS.Platform,
   arch: NodeJS.Architecture,
 ): PreviewBrowserRelease | null => {
@@ -123,13 +123,25 @@ export class PreviewBrowserUnsupportedError extends Schema.TaggedError<PreviewBr
   }
 }
 
+export class PreviewBrowserBundleError extends Schema.TaggedError<PreviewBrowserBundleError>()(
+  "PreviewBrowserBundleError",
+  { path: Schema.String },
+) {
+  override get message(): string {
+    return `T3's packaged headless browser is missing or not executable at '${this.path}'. Reinstall T3 Code.`;
+  }
+}
+
 export class PreviewBrowser extends Context.Service<
   PreviewBrowser,
   {
-    /** Starts installation on first call; returns progress after a bounded wait while installation continues. */
+    /** Source builds install on first use and return progress after a bounded wait. */
     readonly executable: Effect.Effect<
       string,
-      PreviewBrowserInstallError | PreviewBrowserInstallingError | PreviewBrowserUnsupportedError
+      | PreviewBrowserInstallError
+      | PreviewBrowserInstallingError
+      | PreviewBrowserUnsupportedError
+      | PreviewBrowserBundleError
     >;
     readonly installed: Effect.Effect<Option.Option<string>>;
   }
@@ -137,6 +149,7 @@ export class PreviewBrowser extends Context.Service<
 
 export interface PreviewBrowserOptions {
   readonly baseDir: string;
+  readonly bundledDirectory?: string;
   readonly release?: PreviewBrowserRelease | null;
   /** How long a caller waits on an install in progress. Provider tool calls time out near 60s. */
   readonly wait?: Duration.Input;
@@ -162,10 +175,36 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const executableName =
+    platform === "win32" ? "chrome-headless-shell.exe" : "chrome-headless-shell";
+  const findExecutable = (executable: string) =>
+    fs.stat(executable).pipe(
+      Effect.map((info) =>
+        info.type === "File" && (platform === "win32" || (info.mode & 0o111) !== 0)
+          ? Option.some(executable)
+          : Option.none<string>(),
+      ),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    );
+  if (options.bundledDirectory !== undefined) {
+    const executable = path.join(options.bundledDirectory, executableName);
+    const installed = findExecutable(executable);
+    return PreviewBrowser.of({
+      installed,
+      executable: installed.pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () => Effect.fail(new PreviewBrowserBundleError({ path: executable })),
+          }),
+        ),
+      ),
+    });
+  }
   const http = yield* HttpClient.HttpClient;
   // Installs belong to the service, so they finish even when no caller is still waiting.
   const serviceScope = yield* Effect.scope;
-  const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const release =
     options.release === undefined ? previewBrowserRelease(platform, arch) : options.release;
@@ -176,22 +215,13 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
     "chrome-headless-shell",
     release?.platform ?? `${platform}-${arch}`,
   );
-  const executableName =
-    platform === "win32" ? "chrome-headless-shell.exe" : "chrome-headless-shell";
   const gate = yield* Semaphore.make(1);
   let state: InstallState = { _tag: "idle" };
   const progress = { downloadedBytes: 0, unpacking: false };
 
   const installedExecutable = (release: PreviewBrowserRelease) => {
     const executable = path.join(installRoot, release.version, executableName);
-    return fs.stat(executable).pipe(
-      Effect.map((info) =>
-        info.type === "File" && (platform === "win32" || (info.mode & 0o111) !== 0)
-          ? Option.some(executable)
-          : Option.none<string>(),
-      ),
-      Effect.orElseSucceed(() => Option.none<string>()),
-    );
+    return findExecutable(executable);
   };
 
   const download = Effect.fn("PreviewBrowser.download")(
@@ -438,10 +468,35 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
   return PreviewBrowser.of({ executable, installed });
 });
 
+export const resolveBundledDirectory = Effect.fn("PreviewBrowser.resolveBundledDirectory")(
+  function* () {
+    const path = yield* Path.Path;
+    const arch = yield* HostProcess.Architecture;
+    if (!(yield* HostProcess.IsExecutable)) {
+      // Desktop CLI launchers run Electron as Node without a bootstrap envelope.
+      const entry = (yield* HostProcess.Arguments)[1]?.replaceAll("\\", "/");
+      const packaged =
+        entry === undefined
+          ? null
+          : /^(.*)\/(?:app|server)\.asar\/apps\/server\/dist\/bin\.mjs$/.exec(entry);
+      return packaged ? path.join(packaged[1]!, "chrome-headless-shell", arch) : undefined;
+    }
+    return path.join(
+      path.dirname(yield* HostProcess.ExecutablePath),
+      "chrome-headless-shell",
+      arch,
+    );
+  },
+);
+
 export const layer = Layer.effect(
   PreviewBrowser,
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    return yield* makePreviewBrowser({ baseDir: config.baseDir });
+    const bundledDirectory = config.previewBrowserDirectory ?? (yield* resolveBundledDirectory());
+    return yield* makePreviewBrowser({
+      baseDir: config.baseDir,
+      ...(bundledDirectory === undefined ? {} : { bundledDirectory }),
+    });
   }),
 );

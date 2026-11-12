@@ -10,6 +10,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
+import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import { resolveBaseDir } from "../os-jank.ts";
 import { baseDirFlag } from "./config.ts";
 import { resolveRootCliCommand } from "./invocation.ts";
@@ -64,9 +65,16 @@ const aptOffers = Effect.fn("browserSetup.aptOffers")(function* (name: string) {
   return candidate !== undefined && candidate !== "(none)";
 });
 
-const installedBrowser = Effect.fn("browserSetup.installedBrowser")(function* (baseDir: string) {
+const installedBrowser = Effect.fn("browserSetup.installedBrowser")(function* (
+  baseDir: string,
+  bundledDirectory: string | undefined,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  if (bundledDirectory !== undefined) {
+    const executable = path.join(bundledDirectory, "chrome-headless-shell");
+    return (yield* fs.exists(executable)) ? Option.some(executable) : Option.none<string>();
+  }
   const root = path.join(baseDir, "tools", "chrome-headless-shell");
   for (const platform of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
     for (const version of yield* fs
@@ -128,7 +136,8 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
           : undefined;
 
       const needsProfile = yield* PreviewBrowserHost.sandboxBlocked;
-      const browser = yield* installedBrowser(baseDirPath);
+      const bundledDirectory = yield* PreviewBrowser.resolveBundledDirectory();
+      const browser = yield* installedBrowser(baseDirPath, bundledDirectory);
       const missing = Option.isSome(browser)
         ? yield* PreviewBrowserHost.missingLibraries(browser.value)
         : [];
@@ -140,7 +149,9 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
           rootWarning ??
             (Option.isSome(browser)
               ? "This host is ready for T3's browser."
-              : "Chrome's sandbox is allowed here. T3's browser installs on first use; if it then reports missing libraries, run this again."),
+              : bundledDirectory === undefined
+                ? "Chrome's sandbox is allowed here. T3's browser installs on first use; if it then reports missing libraries, run this again."
+                : "Chrome's sandbox is allowed here, but T3's browser was not found. Reinstall T3 Code, then run setup again."),
         );
       }
 

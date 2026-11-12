@@ -82,6 +82,15 @@ it.layer(NodeServices.layer)("build-cli-archive notarization", (it) => {
         '{"id":"new-id","status":"In Progress"}',
       ]) {
         const content = yield* makeContent();
+        const path = yield* Path.Path;
+        const browser = path.join(
+          content.contentDir,
+          "chrome-headless-shell/arm64/chrome-headless-shell",
+        );
+        yield* fs.makeDirectory(path.dirname(browser), { recursive: true });
+        yield* fs.writeFileString(browser, "browser");
+        const browserLibrary = path.join(path.dirname(browser), "libEGL.dylib");
+        yield* fs.writeFileString(browserLibrary, "library");
         yield* fs.writeFileString(content.submissionFile, "stale-id");
         const stub = stubSpawner((subcommand) =>
           subcommand === "submit"
@@ -99,6 +108,24 @@ it.layer(NodeServices.layer)("build-cli-archive notarization", (it) => {
           stub,
         );
         assert.equal(yield* fs.readFileString(content.submissionFile), "new-id");
+        const browserSigning = stub.calls.find(
+          (argv) => argv[0] === "codesign" && argv.at(-1) === browser,
+        );
+        assert.isTrue(browserSigning?.includes("--entitlements"));
+        for (const argv of stub.calls.filter((call) => call[0] === "codesign")) {
+          assert.equal((yield* fs.stat(argv.at(-1)!)).type, "File");
+        }
+        const notarizationZip = stub.calls.find((argv) => argv[0] === "ditto")!;
+        const submittedFiles = yield* fs.readDirectory(notarizationZip.at(-2)!, {
+          recursive: true,
+        });
+        assert.includeMembers(submittedFiles, [
+          path.relative(content.contentDir, browser),
+          path.relative(content.contentDir, browserLibrary),
+        ]);
+        assert.isTrue(
+          path.relative(content.contentDir, notarizationZip.at(-1)!).startsWith(`..${path.sep}`),
+        );
         const [submit] = notarySubcommands(stub.calls);
         assert.equal(submit?.[0], "submit");
         assert.isFalse(submit?.includes("--wait"));

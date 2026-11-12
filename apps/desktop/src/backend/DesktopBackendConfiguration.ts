@@ -521,6 +521,15 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
       }),
+      ...(environment.isPackaged
+        ? {
+            previewBrowserDirectory: environment.path.join(
+              environment.resourcesPath,
+              "chrome-headless-shell",
+              yield* HostProcess.Architecture,
+            ),
+          }
+        : {}),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 
