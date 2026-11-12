@@ -1,11 +1,47 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
+
+it.effect.each([
+  { name: "current profile", profile: PreviewBrowserHost.APPARMOR_PROFILE, blocked: false },
+  {
+    name: "old download-only profile",
+    profile: "/**/tools/chrome-headless-shell/*/*/chrome-headless-shell",
+    blocked: true,
+  },
+  { name: "missing profile", profile: undefined, blocked: true },
+])("checks packaged browser sandbox access with a $name", ({ profile, blocked }) =>
+  Effect.gen(function* () {
+    expect(yield* PreviewBrowserHost.sandboxBlocked).toBe(blocked);
+  }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(
+      FileSystem.FileSystem,
+      FileSystem.makeNoop({
+        readFileString: (path) =>
+          path === PreviewBrowserHost.APPARMOR_PROFILE_PATH
+            ? profile === undefined
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "readFileString",
+                    pathOrDescriptor: path,
+                  }),
+                )
+              : Effect.succeed(profile)
+            : Effect.succeed("1"),
+      }),
+    ),
+  ),
+);
 
 // What `ldd` printed for the pinned headless shell in a bare debian:trixie-slim container.
 const LDD_IN_BARE_DEBIAN = `\tlinux-vdso.so.1 (0x00007ffd2d1f8000)

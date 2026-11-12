@@ -32,6 +32,7 @@ import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-package
 import { signWithJsign } from "./lib/windows-jsign.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { stagePreviewBrowser } from "./lib/stage-preview-browser.ts";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64"]);
@@ -426,15 +427,19 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
   if (deferred !== undefined) yield* fs.remove(deferred, { force: true });
 
   const entitlements = path.join(input.repoRoot, "apps/server/resources/cli-entitlements.plist");
-  const libraries = (yield* fs.readDirectory(input.contentDir, { recursive: true }))
+  const candidates = (yield* fs.readDirectory(input.contentDir, { recursive: true }))
     .filter(
       (entry) =>
         entry.endsWith(".node") ||
         entry.endsWith(".dylib") ||
         entry.endsWith("spawn-helper") ||
-        entry.endsWith("t3-resource-monitor"),
+        entry.endsWith("t3-resource-monitor") ||
+        entry.endsWith("chrome-headless-shell"),
     )
     .map((entry) => path.join(input.contentDir, entry));
+  const libraries = yield* Effect.filter(candidates, (target) =>
+    fs.stat(target).pipe(Effect.map((stat) => stat.type === "File")),
+  );
 
   for (const target of [...libraries, input.executablePath]) {
     yield* runCommand(
@@ -443,7 +448,9 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
         "--sign",
         identity,
         ...(identity === "-" ? [] : ["--options", "runtime", "--timestamp"]),
-        ...(target === input.executablePath ? ["--entitlements", entitlements] : []),
+        ...(target === input.executablePath || path.basename(target) === "chrome-headless-shell"
+          ? ["--entitlements", entitlements]
+          : []),
         target,
       ]),
       `codesign ${path.relative(input.contentDir, target)}`,
@@ -460,9 +467,9 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
     return;
   }
   // notarytool requires an archive; bare executables rely on online tickets because they cannot be stapled.
-  const notarizeZip = path.join(path.dirname(input.executablePath), ".notarize-t3.zip");
+  const notarizeZip = path.join(path.dirname(input.contentDir), ".notarize-t3.zip");
   yield* runCommand(
-    ChildProcess.make("ditto", ["-c", "-k", "--keepParent", input.executablePath, notarizeZip]),
+    ChildProcess.make("ditto", ["-c", "-k", "--keepParent", input.contentDir, notarizeZip]),
     "ditto (notarization zip)",
   );
   const submission = yield* notarytool(
@@ -636,6 +643,13 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.copyFile(builtExecutable, path.join(contentDir, executableName));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
   yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
+  yield* stagePreviewBrowser({
+    repoRoot,
+    cacheDir: stageRoot,
+    destinationDirectory: path.join(contentDir, "chrome-headless-shell"),
+    platform: input.platform,
+    arch: input.arch,
+  });
   yield* stageRuntimeExternals({
     repoRoot,
     stageDir: contentDir,

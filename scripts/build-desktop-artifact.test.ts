@@ -536,6 +536,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.isNull(preview.publish);
+      const mac = preview.mac as { x64ArchFiles?: string };
+      assert.isDefined(mac.x64ArchFiles);
+      for (const arch of ["arm64", "x64"]) {
+        for (const binary of ["chrome-headless-shell", "libEGL.dylib"]) {
+          assert.isTrue(
+            NodePath.matchesGlob(
+              `Contents/Resources/chrome-headless-shell/${arch}/${binary}`,
+              mac.x64ArchFiles!,
+            ),
+          );
+        }
+      }
+      assert.isFalse(NodePath.matchesGlob("Contents/Resources/other-helper", mac.x64ArchFiles!));
       assert.isNull(previewChannel.publish);
       assert.deepStrictEqual(release.publish, [
         {

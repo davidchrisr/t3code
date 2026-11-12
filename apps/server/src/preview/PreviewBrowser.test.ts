@@ -81,6 +81,7 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
     readonly body?: Stream.Stream<Uint8Array>;
     readonly wait?: Duration.Input;
     readonly unsupported?: boolean;
+    readonly bundled?: boolean;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -93,6 +94,7 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
   const requests: Array<string> = [];
   const browser = yield* PreviewBrowser.makePreviewBrowser({
     baseDir,
+    ...(options.bundled ? { bundledDirectory: path.join(baseDir, "bundle") } : {}),
     release: options.unsupported
       ? null
       : {
@@ -124,6 +126,61 @@ const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
 });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PreviewBrowser", (it) => {
+  it.effect.each([
+    {
+      entry: "/Applications/T3 Code.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs",
+      root: "/Applications/T3 Code.app/Contents/Resources",
+    },
+    {
+      entry: "/tmp/.mount-t3/resources/app.asar/apps/server/dist/bin.mjs",
+      root: "/tmp/.mount-t3/resources",
+    },
+    {
+      entry: "C:\\T3 Code\\resources\\server.asar\\apps\\server\\dist\\bin.mjs",
+      root: "C:/T3 Code/resources",
+    },
+    { entry: "/repo/apps/server/src/bin.ts", root: undefined },
+    { entry: "/repo/apps/server/dist/bin.mjs", root: undefined },
+  ])("resolves the browser for CLI entry $entry", ({ entry, root }) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      expect(yield* PreviewBrowser.resolveBundledDirectory()).toBe(
+        root === undefined ? undefined : path.join(root, "chrome-headless-shell", "arm64"),
+      );
+    }).pipe(
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.Arguments, ["electron", entry]),
+      Effect.provideService(HostProcess.Architecture, "arm64"),
+    ),
+  );
+
+  it.effect.each(["executable", "missing", "directory", "not executable"] as const)(
+    "uses the packaged browser without downloading when it is %s",
+    (kind) =>
+      Effect.gen(function* () {
+        const { browser, fs, path, baseDir, requests } = yield* makeHarness({ bundled: true });
+        const directory = path.join(baseDir, "bundle");
+        const executable = path.join(directory, executableName);
+        yield* fs.makeDirectory(directory);
+        if (kind === "directory") yield* fs.makeDirectory(executable);
+        if (kind === "executable" || kind === "not executable") {
+          yield* fs.writeFileString(executable, "browser");
+          yield* fs.chmod(executable, kind === "executable" ? 0o755 : 0o644);
+        }
+        const usable =
+          kind === "executable" || (kind === "not executable" && hostPlatform === "win32");
+        expect(yield* browser.installed).toEqual(usable ? Option.some(executable) : Option.none());
+        if (usable) {
+          expect(yield* browser.executable).toBe(executable);
+        } else {
+          const error = yield* browser.executable.pipe(Effect.flip);
+          expect(error._tag).toBe("PreviewBrowserBundleError");
+          expect(error.message).toContain("Reinstall T3 Code");
+        }
+        expect(requests).toEqual([]);
+      }),
+  );
+
   it.effect.each(["0.8.0", "1.2.3"])("retains another version when installing %s", (current) =>
     Effect.gen(function* () {
       const { browser, fs, path, installRoot, requests } = yield* makeHarness({ version: current });

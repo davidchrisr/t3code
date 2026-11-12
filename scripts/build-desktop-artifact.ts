@@ -45,6 +45,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { stagePreviewBrowser } from "./lib/stage-preview-browser.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1020,6 +1021,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!**/node_modules/@cursor/sdk-*/**/*",
   "!apps/desktop/prod-resources/cursor-sdk",
   "!apps/desktop/prod-resources/cursor-sdk/**/*",
+  "!apps/desktop/resources/chrome-headless-shell",
+  "!apps/desktop/resources/chrome-headless-shell/**/*",
+  "!apps/desktop/prod-resources/chrome-headless-shell",
+  "!apps/desktop/prod-resources/chrome-headless-shell/**/*",
   // The installed Claude CLI is supplied explicitly; exclude optional bundled executables, retaining SDK JavaScript.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
   "!**/*.map",
@@ -1093,7 +1098,8 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
   ];
 }
 
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
+// Chrome Headless Shell adds about 290 files, mostly locale packs.
+export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 400;
 export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
 export const WINDOWS_SERVER_EXTRA_RESOURCES = [
   {
@@ -1123,6 +1129,10 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/chrome-headless-shell",
+    to: "chrome-headless-shell",
+  },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
     to: "node_modules/@cursor",
@@ -2867,6 +2877,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
+      // Both Electron slices carry the same architecture-specific browser resources.
+      x64ArchFiles: "Contents/Resources/chrome-headless-shell/**",
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon-source.png",
       category: "public.app-category.developer-tools",
@@ -3792,6 +3804,13 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
+  yield* stagePreviewBrowser({
+    repoRoot,
+    cacheDir: stageRoot,
+    destinationDirectory: path.join(stageResourcesDir, "chrome-headless-shell"),
+    platform: options.platform,
+    arch: options.arch,
+  });
   if (options.platform === "linux") {
     const extensionDir = path.join(stageAppDir, "apps/desktop/gnome-extension");
     yield* fs.makeDirectory(extensionDir, { recursive: true });
