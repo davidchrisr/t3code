@@ -153,6 +153,29 @@ describe("readManagedPolicy", () => {
         '["limits"]["maxRuntimeMod"]',
       );
       assert.isUndefined(yield* read("darwin", {}));
+      const upstreamProfile = {
+        "/Library/Managed Preferences/com.t3tools.t3code.plist": "<upstream profile>",
+      };
+      assert.isUndefined(yield* read("darwin", upstreamProfile, plutil));
+      for (const [platform, upstreamPath, forkPath] of [
+        [
+          "darwin",
+          "/Library/Application Support/T3Code/policy.json",
+          "/Library/Application Support/T3Fork/policy.json",
+        ],
+        ["linux", "/etc/t3code/policy.json", "/etc/t3fork/policy.json"],
+        [
+          "win32",
+          "C:\\Program Files\\T3Code\\policy.json",
+          "C:\\Program Files\\T3Fork\\policy.json",
+        ],
+      ] as const) {
+        assert.isUndefined(yield* read(platform, { [upstreamPath]: policy }));
+        assert.equal(
+          yield* read(platform, { [upstreamPath]: policy, [forkPath]: policy }),
+          forkPath,
+        );
+      }
       assert.include(
         yield* read("darwin", { ...profile, ...file }, plutil),
         "deploy the policy one way",
@@ -174,6 +197,23 @@ describe("readManagedPolicy", () => {
           read("win32", files, {}, registry);
         const json = policyKey([text("Policy", policy)]);
 
+        const requestedKeys: string[] = [];
+        const upstreamOnly = yield* readManagedPolicy("win32").pipe(
+          Effect.provideService(
+            WindowsRegistry,
+            WindowsRegistry.of({
+              readMachineKey: (key) => {
+                requestedKeys.push(key);
+                return Effect.succeed(
+                  key === "SOFTWARE\\Policies\\T3Tools\\T3Code" ? json[""] : undefined,
+                );
+              },
+            }),
+          ),
+          Effect.provide(machine({}, {}, {})),
+        );
+        assert.isUndefined(upstreamOnly);
+        assert.deepStrictEqual(requestedKeys, ["SOFTWARE\\Policies\\T3Tools\\T3Fork"]);
         assert.equal(yield* win32({}, json), WINDOWS_POLICY_KEY);
         assert.isUndefined(yield* win32({}, {}));
         assert.equal(yield* win32(file, {}), managedPolicyPath("win32"));

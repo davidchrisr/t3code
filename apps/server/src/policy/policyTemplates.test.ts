@@ -5,15 +5,26 @@ import {
   WINDOWS_POLICY_VALUES,
 } from "@t3tools/shared/managedPolicyFile";
 
-import { macosProfile, windowsAdmx } from "./policyTemplates.ts";
+import { macosProfile, windowsAdmx, windowsAdml } from "./policyTemplates.ts";
 
-it("gives every registry value the Windows reader accepts a Group Policy control", () => {
+it("generates fork policy templates matching the native readers", () => {
   const admx = windowsAdmx();
+  assert.include(admx, 'namespace="T3Tools.Policies.T3Fork"');
+  assert.include(windowsAdml(), 'id="T3Fork"');
+  const profile = macosProfile(
+    { schemaVersion: 1, organization: "Example Corp" },
+    { profile: "profile-uuid", payload: "payload-uuid" },
+  );
+  assert.equal(profile._tag, "Valid");
+  if (profile._tag === "Valid") {
+    assert.include(profile.profile, "<string>com.t3tools.t3fork</string>");
+    assert.notInclude(profile.profile, "com.t3tools.t3code");
+  }
   for (const name of Object.keys(WINDOWS_POLICY_VALUES)) {
     assert.include(admx, `valueName="${name}"`);
   }
   for (const key of Object.keys(WINDOWS_POLICY_LISTS)) {
-    assert.include(admx, `key="SOFTWARE\\Policies\\T3Tools\\T3Code\\${key}"`);
+    assert.include(admx, `key="SOFTWARE\\Policies\\T3Tools\\T3Fork\\${key}"`);
   }
   for (const name of Object.keys(WINDOWS_POLICY_GROUPS)) {
     assert.include(admx, `valueName="${name}"`);
