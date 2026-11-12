@@ -7,6 +7,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
+import {
+  preventThumbButtonFocus,
+  takeThumbButtonNavigation,
+} from "~/components/preview/thumbButtons";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
@@ -370,6 +374,12 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
 
   if (!clientSettingsHydrated || !config) return null;
 
+  // This fixed wrapper sits outside the right panel shell, so it takes thumb presses itself.
+  const navigateThumb = (direction: "back" | "forward") => {
+    if (direction === "back") void previewBridge?.goBack(runtimeTabId);
+    else void previewBridge?.goForward(runtimeTabId);
+  };
+
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
     renderingActive,
@@ -392,6 +402,8 @@ function LegacyHostedBrowserWebview(props: HostedBrowserViewProps) {
         ...(!presentation.interactive ? { pointerEvents: "none" } : {}),
       }}
       onScroll={syncContentPresentation}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) => takeThumbButtonNavigation(event, navigateThumb)}
       data-preview-rendering={renderingActive ? "active" : "suspended"}
       data-preview-viewport={runtimeTabId}
     >

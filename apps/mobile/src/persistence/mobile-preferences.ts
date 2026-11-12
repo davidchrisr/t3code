@@ -116,6 +116,8 @@ export interface Preferences {
   readonly alwaysExpandThoughts?: boolean;
   readonly commandExpansion?: ChatExpansionSettings["commandExpansion"];
   readonly autoCollapseCompletedTurns?: boolean;
+  /** The client `language` setting: a locale code or "system". Unset means English. */
+  readonly language?: string;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
@@ -203,6 +205,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     alwaysExpandThoughts?: boolean;
     commandExpansion?: ChatExpansionSettings["commandExpansion"];
     autoCollapseCompletedTurns?: boolean;
+    language?: string;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
@@ -320,6 +323,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (parsed.followUpBehavior === "queue" || parsed.followUpBehavior === "steer") {
     preferences.followUpBehavior = parsed.followUpBehavior;
   }
+  if (typeof parsed.language === "string") preferences.language = parsed.language;
   if (Array.isArray(parsed.microphones)) {
     preferences.microphones = parsed.microphones.flatMap((entry): MicrophoneEntry[] => {
       if (typeof entry !== "object" || entry === null || !isMicrophoneKind(entry.kind)) return [];

@@ -19,9 +19,11 @@ import {
   WsRpcGroup,
   type VcsStatusStreamEvent,
   type ServerSettings,
+  type ModelSelection,
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadProjection,
@@ -69,30 +71,42 @@ const auth = {
   sessionCookieName: "t3_session",
 };
 
-const defaultServerConfig: ServerConfig = {
-  ...Schema.decodeUnknownSync(ServerConfig)({
+const readyProvider = (
+  instanceId: string,
+  driver: string,
+  models: ReadonlyArray<{ readonly slug: string; readonly name: string }>,
+) => ({
+  instanceId,
+  driver,
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt: "2026-03-17T19:12:28.000Z",
+  models: models.map((model) => ({ ...model, isCustom: false, capabilities: null })),
+});
+export const CODEX_PROVIDER = readyProvider(CODEX, "codex", [
+  { slug: "gpt-5.4", name: "GPT-5.4" },
+  { slug: "gpt-5.5", name: "GPT-5.5" },
+]);
+export const CLAUDE_PROVIDER = {
+  ...readyProvider("claudeAgent", "claudeAgent", [
+    { slug: "claude-opus-4-6", name: "Claude Opus 4.6" },
+  ]),
+  slashCommands: [{ name: "compact" }],
+};
+
+const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
+const makeServerConfig = (providers: ReadonlyArray<unknown>): ServerConfig => ({
+  ...decodeServerConfig({
     environment: descriptor,
     auth,
     cwd: "/workspace/render",
     keybindingsConfigPath: "/workspace/.t3/keybindings.json",
     keybindings: [],
     issues: [],
-    providers: [
-      {
-        instanceId: CODEX,
-        driver: "codex",
-        enabled: true,
-        installed: true,
-        version: "1.0.0",
-        status: "ready",
-        auth: { status: "authenticated" },
-        checkedAt: "2026-03-17T19:12:28.000Z",
-        models: [
-          { slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, capabilities: null },
-          { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null },
-        ],
-      },
-    ],
+    providers,
     availableEditors: [],
     observability: {
       logsDirectoryPath: "/workspace/.t3/logs",
@@ -106,13 +120,13 @@ const defaultServerConfig: ServerConfig = {
     shellResumeCompletionMarker: true,
   }),
   keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
-};
-let configuredServerConfig = defaultServerConfig;
+});
+let baseServerConfig = makeServerConfig([CODEX_PROVIDER]);
 // A server only leaves threads out of the shell when it serves their families.
 const serverConfig = (): ServerConfig =>
   threads.some((thread) => thread.olderSettled)
-    ? { ...configuredServerConfig, shellThreadFamilies: true }
-    : configuredServerConfig;
+    ? { ...baseServerConfig, shellThreadFamilies: true }
+    : baseServerConfig;
 
 const project: OrchestrationProjectShell = {
   id: PROJECT_ID,
@@ -173,13 +187,19 @@ export function assistantItem(
   } satisfies OrchestrationV2TurnItem;
 }
 
-function run(threadId: ThreadId, id: RunId, ordinal: number, userMessageId: string) {
+function run(
+  threadId: ThreadId,
+  id: RunId,
+  ordinal: number,
+  userMessageId: string,
+  modelSelection: ModelSelection = MODEL,
+) {
   return {
     id,
     threadId,
     ordinal,
-    providerInstanceId: CODEX,
-    modelSelection: MODEL,
+    providerInstanceId: modelSelection.instanceId,
+    modelSelection,
     providerThreadId: null,
     userMessageId: MessageId.make(userMessageId),
     rootNodeId: null,
@@ -200,18 +220,26 @@ export interface FakeThread {
   readonly olderSettled?: true;
   readonly id: ThreadId;
   readonly title: string;
+  /** Defaults to GPT-5.4 on Codex. */
+  readonly modelSelection?: ModelSelection;
+  /** The first is the thread's active provider thread. */
+  readonly providerThreads?: ReadonlyArray<OrchestrationV2ProviderThread>;
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
 }
 
 /** A thread of `turns` user prompts, each answered in markdown with a list and inline code. */
-export function threadWithHistory(name: string, turns: number): FakeThread {
+export function threadWithHistory(
+  name: string,
+  turns: number,
+  modelSelection: ModelSelection = MODEL,
+): FakeThread {
   const id = ThreadId.make(name);
   const runs: OrchestrationV2Run[] = [];
   const items: OrchestrationV2TurnItem[] = [];
   for (let turn = 0; turn < turns; turn++) {
     const runId = RunId.make(`${name}-run-${turn}`);
-    runs.push(run(id, runId, turn + 1, `${name}-user-${turn}`));
+    runs.push(run(id, runId, turn + 1, `${name}-user-${turn}`, modelSelection));
     items.push(
       userItem(id, runId, `${name}-user-${turn}`, turn * 2, `${name}: question ${turn}`),
       assistantItem(
@@ -224,22 +252,23 @@ export function threadWithHistory(name: string, turns: number): FakeThread {
       ),
     );
   }
-  return { id, title: `Thread ${name}`, runs, items };
+  return { id, title: `Thread ${name}`, modelSelection, runs, items };
 }
 
 function shellOf(thread: FakeThread): OrchestrationV2ThreadShell {
   const latest = thread.runs.at(-1);
+  const modelSelection = thread.modelSelection ?? MODEL;
   return {
     id: thread.id,
     projectId: PROJECT_ID,
     title: thread.title,
-    providerInstanceId: CODEX,
-    modelSelection: MODEL,
+    providerInstanceId: modelSelection.instanceId,
+    modelSelection,
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: "main",
     worktreePath: null,
-    activeProviderThreadId: null,
+    activeProviderThreadId: thread.providerThreads?.[0]?.id ?? null,
     lineage: {
       rootThreadId: thread.sideChatOf ?? thread.id,
       parentThreadId: thread.sideChatOf ?? null,
@@ -291,7 +320,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
       interactionMode: shell.interactionMode,
       branch: shell.branch,
       worktreePath: shell.worktreePath,
-      activeProviderThreadId: null,
+      activeProviderThreadId: shell.activeProviderThreadId,
       lineage: shell.lineage,
       forkedFrom: null,
       createdBy: "user",
@@ -309,7 +338,7 @@ function projectionOf(thread: FakeThread): OrchestrationV2ThreadProjection {
     nodes: [],
     subagents: [],
     providerSessions: [],
-    providerThreads: [],
+    providerThreads: [...(thread.providerThreads ?? [])],
     providerTurns: [],
     runtimeRequests: [],
     messages: [],
@@ -467,14 +496,19 @@ const encodedDescriptor = Schema.encodeSync(ExecutionEnvironmentDescriptor)(
 /** Serves the environment's HTTP API and these threads until disposed. */
 export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
-  options: Partial<ServerSettings> & { readonly acceptCommands?: boolean } = {},
+  options: Partial<ServerSettings> & {
+    readonly acceptCommands?: boolean;
+    readonly providers?: ReadonlyArray<unknown>;
+  } = {},
 ): Disposable {
   threads = fixtures;
-  const { acceptCommands: enableCommands = false, ...settings } = options;
-  configuredServerConfig = {
-    ...defaultServerConfig,
-    settings: { ...defaultServerConfig.settings, ...settings },
-  };
+  const {
+    acceptCommands: enableCommands = false,
+    providers = [CODEX_PROVIDER],
+    ...settings
+  } = options;
+  const config = makeServerConfig(providers);
+  baseServerConfig = { ...config, settings: { ...config.settings, ...settings } };
   dispatched = [];
   acceptCommands = enableCommands;
   globalThis.fetch = async (input, init) => {
@@ -498,7 +532,7 @@ export function installFakeEnvironment(
     [Symbol.dispose]: () => {
       globalThis.fetch = realFetch;
       threads = [];
-      configuredServerConfig = defaultServerConfig;
+      baseServerConfig = makeServerConfig([CODEX_PROVIDER]);
       dispatched = [];
       acceptCommands = false;
     },

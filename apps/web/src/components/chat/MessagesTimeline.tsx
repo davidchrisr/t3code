@@ -69,6 +69,7 @@ import {
   readTimelinePosition,
   type RememberedTimelinePosition,
   rememberTimelinePosition,
+  resolveDisclosureRevealScrollDelta,
 } from "./timelineScrollAnchoring";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -209,6 +210,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   },
 } as const satisfies MaintainScrollAtEndOptions;
 const EMPTY_RUN_IDS: ReadonlySet<RunId> = new Set();
+const EMPTY_TIMELINE_ENTRIES: ReadonlyArray<TimelineEntry> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH = {
   ...TIMELINE_MAINTAIN_SCROLL_AT_END,
   animated: true,
@@ -235,6 +237,7 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  onReplyToResponse?: TimelineRowSharedState["onReplyToResponse"];
   isWorking: boolean;
   runlessWorkActive?: boolean;
   activeTurnStartedAt?: string | null;
@@ -266,7 +269,10 @@ interface MessagesTimelineProps {
   announceTurnStatus?: boolean;
   onOpenToolDiff?: (target: ToolCallDiffTarget) => void;
   onOpenTurnDiff?: (runId: RunId, filePath?: string) => void;
-  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onOpenThread: (
+    threadId: OrchestrationV2TurnItem["threadId"],
+    environmentId?: EnvironmentId,
+  ) => void;
   renderHtmlRender?: TimelineRowSharedState["renderHtmlRender"];
   turnItemSource?: TimelineRowSharedState["turnItemSource"];
   /**
@@ -287,7 +293,7 @@ interface MessagesTimelineProps {
     readonly runId: RunId;
   }) => Promise<void>;
   supportsConversationRollback: boolean;
-  threadStartCheckpointReady?: boolean;
+  threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
@@ -348,6 +354,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   citationRequest = null,
   citationHistory = CITED_HISTORY_LOADING,
   onCiteAssistantText,
+  onReplyToResponse,
   isWorking,
   runlessWorkActive = false,
   activeTurnStartedAt = null,
@@ -386,7 +393,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   workflowOpening = null,
   onForkFromRun,
   supportsConversationRollback,
-  threadStartCheckpointReady = false,
+  threadStartCheckpointAvailable = false,
   availableRevertTurnCounts,
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
@@ -497,14 +504,80 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
-  const preserveDisclosurePosition = (anchorKey: string) => {
+  const disclosureRevealRef = useRef<{
+    key: string;
+    identity: string;
+    entryId: string | undefined;
+    contentKey: string | undefined;
+    ready: boolean;
+  } | null>(null);
+  const disclosureRevealFrameRef = useRef<number | null>(null);
+
+  // Anchoring keeps the toggled row still, so content that expands below it
+  // near the bottom would otherwise land under the composer.
+  const revealExpandedDisclosure = useStableCallback(() => {
+    const pending = disclosureRevealRef.current;
+    if (!pending || pending.identity !== listIdentityKey) return;
+    const state = listRef.current?.getState();
+    const element = listRef.current?.getScrollableNode();
+    const index = state?.indexByKey(pending.key);
+    const row = index === undefined ? undefined : state?.elementAtIndex(index);
+    if (!element || !(row instanceof HTMLElement)) return;
+    const viewport = element.getBoundingClientRect();
+    const entry = pending.entryId
+      ? row.querySelector<HTMLElement>(`[data-work-entry-id="${CSS.escape(pending.entryId)}"]`)
+      : null;
+    const contentIndex = pending.contentKey ? state?.indexByKey(pending.contentKey) : undefined;
+    const content = contentIndex === undefined ? null : state?.elementAtIndex(contentIndex);
+    const bounds = (entry ?? row).getBoundingClientRect();
+    const delta = resolveDisclosureRevealScrollDelta({
+      rowTop: bounds.top,
+      rowBottom: content?.getBoundingClientRect().bottom ?? bounds.bottom,
+      viewportTop: viewport.top,
+      viewportBottom: viewport.bottom,
+      composerOverlayHeight: contentInsetEndAdjustment,
+      anchorOffset: CHAT_TIMELINE_ANCHOR_OFFSET,
+    });
+    // Nested lists can finish measuring before their height reaches the outer scroller.
+    if (pending.ready && element.scrollTop + delta <= element.scrollHeight - element.clientHeight) {
+      disclosureRevealRef.current = null;
+    }
+    if (delta > 0) {
+      element.scrollBy({ top: delta, behavior: prefersReducedMotion ? "auto" : "smooth" });
+    }
+  });
+  const scheduleDisclosureReveal = () => {
+    if (disclosureRevealFrameRef.current !== null) {
+      cancelAnimationFrame(disclosureRevealFrameRef.current);
+    }
+    disclosureRevealFrameRef.current = requestAnimationFrame(() => {
+      disclosureRevealFrameRef.current = null;
+      revealExpandedDisclosure();
+    });
+  };
+
+  const preserveDisclosurePosition = (
+    anchorKey: string,
+    reveal?: { readonly entryId?: string | undefined; readonly contentKey?: string | undefined },
+  ) => {
     const list = listRef.current;
+    disclosureRevealRef.current = null;
     // An anchor ends end-follow until the reader scrolls, so a streaming turn keeps the live end.
     if (!list || (isWorking && list.getState().isFollowingEnd)) return;
+    if (reveal) {
+      disclosureRevealRef.current = {
+        key: anchorKey,
+        identity: listIdentityKey,
+        entryId: reveal.entryId,
+        contentKey: reveal.contentKey,
+        ready: false,
+      };
+    }
     list.cancelScroll();
     list.anchorVisibleContent({ key: anchorKey });
   };
 
+  // Turn and attempt folds reveal later rows rather than growing their own row.
   const onToggleTurnFold = (runId: RunId) => {
     preserveDisclosurePosition(`turn-fold:${runId}`);
     const expanded =
@@ -527,7 +600,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   };
   const onToggleWorkGroup = (groupId: string, anchorKey: string) => {
-    preserveDisclosurePosition(anchorKey);
     const expanded = rawRows.some(
       (row) =>
         (row.kind === "work-toggle" || row.kind === "work-live" || row.kind === "thinking") &&
@@ -537,6 +609,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const collapsedGroups = workGroupViewState.collapsedGroups;
     if (expanded) collapsedGroups.add(groupId);
     else collapsedGroups.delete(groupId);
+    preserveDisclosurePosition(
+      anchorKey,
+      expanded ? undefined : { contentKey: `${groupId}:details` },
+    );
     setExpandedWorkGroupIds((existing) => {
       const next = new Set(existing);
       if (expanded) {
@@ -595,6 +671,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
 
   const preferredToolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
+  const screenReaderAnnouncements = useClientSettings(
+    (settings) => settings.screenReaderAnnouncements,
+  );
   const toolCallVisibility =
     findActive && preferredToolCallVisibility === "zen" ? "hideAll" : preferredToolCallVisibility;
   const revealedMessageId =
@@ -712,7 +791,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     activeTurnStartedAt,
     turnDiffSummaries,
     supportsConversationRollback,
-    threadStartCheckpointReady,
+    threadStartCheckpointAvailable,
     availableRevertTurnCounts,
     worktreeSetup,
     toolCallVisibility,
@@ -1058,6 +1137,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     canOperateThread,
     onRespondToApproval,
     citationRequest: readyCitationRequest,
+    onReplyToResponse,
     listRef,
     timestampFormat,
     routeThreadKey,
@@ -1088,7 +1168,21 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: preserveDisclosurePosition,
+    onToggleWorkEntry: (anchorKey, collapsed, entryId) =>
+      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId }),
+    onWorkEntryContentReady: (anchorKey, entryId) => {
+      const pending = disclosureRevealRef.current;
+      if (
+        !pending ||
+        pending.identity !== listIdentityKey ||
+        (pending.contentKey === undefined
+          ? pending.key !== anchorKey || pending.entryId !== entryId
+          : pending.contentKey !== anchorKey)
+      )
+        return;
+      pending.ready = pending.contentKey === undefined;
+      scheduleDisclosureReveal();
+    },
     onCancelWorktreeSetup: onCancelWorktreeSetup ?? null,
     retryableWorkspacePreparationRunIds,
     onRetryWorkspacePreparation: onRetryWorkspacePreparation ?? null,
@@ -1132,6 +1226,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
       runId={announcedRun?.runId ?? null}
       runStatus={announcedRun?.status ?? null}
       detailBehind={detailBehindShell}
+      level={screenReaderAnnouncements}
+      entries={screenReaderAnnouncements === "status" ? EMPTY_TIMELINE_ENTRIES : timelineEntries}
+      workspaceRoot={workspaceRoot}
     />
   );
   const listHeaderLeadingContent =
@@ -1186,6 +1283,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     viewportRef.current = viewport;
     const detachViewport = viewport ? onViewportAttach?.(viewport) : undefined;
     const stopRememberingRelease = viewport?.onFollowReleased(rememberReleasedPosition);
+    const stopDisclosureReveal = viewport?.subscribe(() => {
+      disclosureRevealRef.current = null;
+    });
     let contentSizeFrame: number | null = null;
     // LegendList lays rows out from layout effects; the next frame sees them settled.
     let scheduledData: unknown = null;
@@ -1200,6 +1300,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       contentSizeFrame = requestAnimationFrame(() => {
         contentSizeFrame = null;
         handleContentSizeChanged(laidOutData);
+        revealExpandedDisclosure();
       });
     };
     const stopListeningToContentSize = list
@@ -1209,7 +1310,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
     return () => {
       stopListeningToContentSize?.();
       stopRememberingRelease?.();
+      stopDisclosureReveal?.();
       if (contentSizeFrame !== null) cancelAnimationFrame(contentSizeFrame);
+      if (disclosureRevealFrameRef.current !== null) {
+        cancelAnimationFrame(disclosureRevealFrameRef.current);
+        disclosureRevealFrameRef.current = null;
+      }
       detachViewport?.();
       viewport?.dispose();
       if (viewportRef.current === viewport) viewportRef.current = null;
