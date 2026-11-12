@@ -60,7 +60,7 @@ const diagnose = (input: {
     version: input.version ?? LOADER_ERROR,
   });
   return PreviewBrowserHost.diagnoseLaunchFailure({
-    executable: "/home/me/.t3/tools/chrome-headless-shell/linux64/154/chrome-headless-shell",
+    executable: "/home/me/.t3fork/tools/chrome-headless-shell/linux64/154/chrome-headless-shell",
     output: input.output,
     setupCommand: "sudo t3 browser setup",
   }).pipe(
@@ -83,8 +83,8 @@ describe("diagnoseLaunchFailure", () => {
       expect(error).toBeInstanceOf(PreviewBrowserHost.PreviewBrowserRootError);
       expect(error?.message).toContain("T3 server is running as root");
       expect(error?.message).toContain("T3 server's environment and restart the server");
-      expect(error?.message).toContain("T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve");
-      expect(error?.message).toContain("Environment=T3CODE_SERVER_BROWSER_SANDBOX=0");
+      expect(error?.message).toContain("T3FORK_SERVER_BROWSER_SANDBOX=0 t3 serve");
+      expect(error?.message).toContain("Environment=T3FORK_SERVER_BROWSER_SANDBOX=0");
       expect(error?.message).toContain("this disables Chrome's sandbox");
       expect(commands).toEqual([]);
     }),

@@ -239,11 +239,13 @@ type DelegateTaskInput = {
     model?: string;
   };
   title?: string;
-  role?: "implementation" | "research" | "review" | "design" | "test" | "general";
+  role?:
+    "implementation" | "research" | "review" | "design" | "test" | "general";
   mode?: "async" | "wait";
   timeoutMs?: number;
   clientRequestId?: string;
-  runtimeMode?: "inherit" | "approval-required" | "auto-accept-edits" | "full-access";
+  runtimeMode?:
+    "inherit" | "approval-required" | "auto-accept-edits" | "full-access";
   interactionMode?: "inherit" | "plan" | "default";
 };
 ```
@@ -293,7 +295,14 @@ type DelegateTaskResult = {
   childThreadId: string;
   childRunId: string | null;
   childNodeId: string;
-  status: "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled" | "interrupted";
+  status:
+    | "queued"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
   workState: "working" | "waiting_for_children" | "result_available";
   hasPendingChildRuns: boolean;
   providerInstanceId: string;
@@ -301,13 +310,19 @@ type DelegateTaskResult = {
   summary: string | null;
   resultContextTransferId: string | null;
   latestTerminalRunId: string | null;
-  latestTerminalStatus: "completed" | "failed" | "cancelled" | "interrupted" | null;
+  latestTerminalStatus:
+    "completed" | "failed" | "cancelled" | "interrupted" | null;
   latestTerminalSummary: string | null;
   latestTerminalResultContextTransferId: string | null;
   hasPendingQuestion: boolean;
   pendingApproval: {
     requestId: string;
-    kind: "command" | "file-read" | "file-change" | "mcp-elicitation" | "permission";
+    kind:
+      | "command"
+      | "file-read"
+      | "file-change"
+      | "mcp-elicitation"
+      | "permission";
     runId: string;
   } | null;
   waitTimedOut: boolean;
@@ -349,7 +364,8 @@ type CreateThreadsInput = {
       driverKind?: string;
       model?: string;
     };
-    runtimeMode?: "inherit" | "approval-required" | "auto-accept-edits" | "full-access";
+    runtimeMode?:
+      "inherit" | "approval-required" | "auto-accept-edits" | "full-access";
     interactionMode?: "inherit" | "plan" | "default";
   }>;
   clientRequestId?: string;
@@ -413,7 +429,7 @@ links name no environment: clients resolve them in the message's environment,
 then by a unique match in another enabled environment. An outside OAuth client,
 one that is not a linked environment, cannot render `t3-thread://` links, so it
 gets the link Copy thread copies, `https://app.t3.codes/threads/<environmentId>/<threadId>`
-on the server's `T3CODE_HOSTED_APP_URL`, for threads in this environment. The
+on the server's `T3FORK_HOSTED_APP_URL`, for threads in this environment. The
 hosted app offers the desktop app, the mobile app, or itself.
 
 List and read results report `snoozed` and `snoozedUntil`, and

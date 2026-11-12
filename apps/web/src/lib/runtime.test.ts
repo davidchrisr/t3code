@@ -11,8 +11,8 @@ afterEach(() => {
 describe("web runtime relay telemetry policy", () => {
   it("preserves user tracing while relay exports are disabled", async () => {
     vi.resetModules();
-    vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
-    vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", "true");
+    vi.stubEnv("T3FORK_TELEMETRY_ENABLED", "false");
+    vi.stubEnv("T3FORK_OTEL_SDK_DISABLED", "true");
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_URL", "https://telemetry.example.test/v1/traces");
     vi.stubEnv("VITE_RELAY_OTLP_TRACES_DATASET", "relay-test");

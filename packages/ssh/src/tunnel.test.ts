@@ -196,6 +196,14 @@ describe("ssh tunnel scripts", () => {
         const bin = NodePath.join(root, "bin");
         NodeFS.mkdirSync(bin);
         NodeFS.mkdirSync(NodePath.join(root, "home"));
+        const legacy = NodePath.join(root, "home/.t3fork/runtime/versions", ARCHIVE.archiveVersion);
+        NodeFS.mkdirSync(legacy, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(legacy, ".install-complete"), ARCHIVE.archiveVersion);
+        NodeFS.writeFileSync(
+          NodePath.join(legacy, "t3"),
+          "#!/bin/sh\necho upstream-executed >&2\n",
+          { mode: 0o755 },
+        );
         NodeFS.writeFileSync(
           NodePath.join(bin, "uname"),
           `#!/bin/sh\ncase "$1" in -s) echo ${system} ;; -m) echo ${machine} ;; esac\n`,
@@ -203,7 +211,7 @@ describe("ssh tunnel scripts", () => {
         );
         NodeFS.writeFileSync(
           NodePath.join(bin, "curl"),
-          "#!/bin/sh\necho 'download attempt' >&2\nexit 22\n",
+          '#!/bin/sh\nprintf "download attempt %s\\n" "$*" >&2\nexit 22\n',
           { mode: 0o755 },
         );
         const runner = NodePath.join(root, "run-t3.sh");
@@ -214,7 +222,12 @@ describe("ssh tunnel scripts", () => {
         });
         assert.notEqual(result.status, 0);
         if (downloads) {
-          assert.include(result.stderr, "download attempt");
+          assert.include(
+            result.stderr,
+            `https://github.com/davidchrisr/t3code/releases/download/v${ARCHIVE.archiveVersion}/SHA256SUMS`,
+          );
+          assert.notInclude(result.stderr, "pingdotgg");
+          assert.notInclude(result.stderr, "upstream-executed");
         } else {
           assert.notInclude(result.stderr, "download attempt");
           assert.include(result.stderr, "has no t3 release archive.");
@@ -724,7 +737,7 @@ describe("ssh tunnel scripts", () => {
         const serverScript = path.join(home, "fake-t3.cjs");
         yield* fs.writeFileString(serverScript, fakeT3Serve(publishDelayMs));
         // A launch that died holding the lock must not block or double-admit later ones.
-        const launchLock = path.join(home, ".t3", "ssh-launch", ".launch.lock");
+        const launchLock = path.join(home, ".t3fork", "ssh-launch", ".launch.lock");
         yield* fs.makeDirectory(path.dirname(launchLock), { recursive: true });
         yield* fs.writeFileString(launchLock, "999999999\n");
         const targets = [
@@ -742,7 +755,7 @@ describe("ssh tunnel scripts", () => {
         ).pipe(Effect.provide(localRemoteShellLayer(home)));
 
         const ownerPid = Number(
-          yield* fs.readFileString(path.join(home, ".t3", "userdata", "server.lock")),
+          yield* fs.readFileString(path.join(home, ".t3fork", "userdata", "server.lock")),
         );
         assert.sameMembers(
           launches.map((launch) => launch.remoteServerKind),
@@ -756,7 +769,7 @@ describe("ssh tunnel scripts", () => {
           if (launch.remoteServerKind !== "managed") continue;
           const stateKey = yield* remoteStateKey(targets[index]!);
           const recordedPid = yield* fs.readFileString(
-            path.join(home, ".t3", "ssh-launch", stateKey, "pid"),
+            path.join(home, ".t3fork", "ssh-launch", stateKey, "pid"),
           );
           assert.equal(
             Number(recordedPid.trim()),

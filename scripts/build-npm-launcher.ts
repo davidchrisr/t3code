@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GitHub archives avoid npm scanning delays; output <output-dir>/t3/ and publishable t3.tgz.
+// Outputs <output-dir>/t3/ and t3.tgz with the fork's disabled npm bootstrap.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -30,13 +30,12 @@ export class NpmLauncherCommandFailedError extends Schema.TaggedError<NpmLaunche
   }
 }
 
-/** engines requires import.meta.dirname and fetch. `t3code` is read back by npmReleaseDatabaseMigration. */
 export function npmLauncherPackageManifest(version: string, databaseMigration: number) {
   return {
     name: NPM_LAUNCHER_PACKAGE_NAME,
     version,
     description:
-      "T3 Code CLI. Downloads the self-contained executable for this platform from the GitHub Release.",
+      "T3 Fork npm bootstrap is disabled; use the desktop app or a fork release archive.",
     license: serverPackageJson.license,
     repository: serverPackageJson.repository,
     bin: { t3: "./bin/t3.mjs" },
@@ -116,7 +115,7 @@ const command = Command.make(
   "build-npm-launcher",
   {
     version: Flag.String("version").pipe(
-      Flag.withDescription("Exact release version; the launcher downloads this version's archive."),
+      Flag.withDescription("Version recorded in the disabled bootstrap package."),
     ),
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("npm-packages")),
   },

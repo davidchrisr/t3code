@@ -38,7 +38,7 @@ export interface UninstallPlan {
   readonly userdataDir: string;
 }
 
-/** Delete only launchers targeting this home's runtime/versions. */
+/** Delete only launchers targeting this home's runtime/fork-versions. */
 export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(function* (input: {
   readonly launchedAs: string | undefined;
   readonly versionsDir: string;
@@ -62,7 +62,7 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
   return isVersionExecutable(path, input.versionsDir, resolved) ? input.launchedAs : undefined;
 });
 
-/** Whether `launcher` is a link or unedited `t3.cmd` into this home's runtime/versions. */
+/** Whether `launcher` is a link or unedited `t3.cmd` into this home's runtime/fork-versions. */
 const ownsLauncher = Effect.fn("cli.uninstall.owns_launcher")(function* (
   launcher: string,
   versionsDir: string,
@@ -100,7 +100,7 @@ const ownsLauncher = Effect.fn("cli.uninstall.owns_launcher")(function* (
 
 /**
  * Launchers recorded in `runtime/launchers` by the install scripts and `t3 install` that still
- * point into this home's runtime/versions. npx can run a different version than the installed
+ * point into this home's runtime/fork-versions. npx can run a different version than the installed
  * one, so the launcher this process started from does not always name them.
  */
 export const findRecordedLaunchers = Effect.fn("cli.uninstall.find_recorded_launchers")(function* (

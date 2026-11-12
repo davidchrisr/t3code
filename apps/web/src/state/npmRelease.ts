@@ -18,7 +18,8 @@ function unsupportedLookup(config: ServerConfig | null): ServerNpmReleaseError |
   return config.environment.capabilities.npmReleaseLookup === true
     ? null
     : new ServerNpmReleaseError({
-        reason: "This server does not support registry lookups. Update it before switching tracks.",
+        reason:
+          "This server cannot check release metadata. Install the desired build manually to switch tracks.",
       });
 }
 
@@ -29,16 +30,29 @@ export function npmReleaseFailureMessage(cause: Cause.Cause<unknown>): string {
     : "Could not check this environment's npm registry. Check the connection and registry settings.";
 }
 
+const releaseEnvironmentIdAtom = Atom.make((get) => {
+  const primary = get(primaryEnvironmentIdAtom);
+  // With the desktop's local server turned off there is no primary, so a connected server answers.
+  const candidates =
+    primary === null ? get(environmentSummaries.connectedEnvironmentIdsAtom) : [primary];
+  return (
+    candidates.find(
+      (id) => unsupportedLookup(get(serverEnvironment.configValueAtom(id))) === null,
+    ) ?? candidates[0]
+  );
+});
+
+export const npmReleaseSupportedAtom = Atom.make((get) => {
+  const environmentId = get(releaseEnvironmentIdAtom);
+  return (
+    environmentId !== undefined &&
+    unsupportedLookup(get(serverEnvironment.configValueAtom(environmentId))) === null
+  );
+});
+
 export const npmReleaseAtom = Atom.family((spec: string) =>
   Atom.make((get) => {
-    const primary = get(primaryEnvironmentIdAtom);
-    // With the desktop's local server turned off there is no primary, so a connected server answers.
-    const candidates =
-      primary === null ? get(environmentSummaries.connectedEnvironmentIdsAtom) : [primary];
-    const environmentId =
-      candidates.find(
-        (id) => unsupportedLookup(get(serverEnvironment.configValueAtom(id))) === null,
-      ) ?? candidates[0];
+    const environmentId = get(releaseEnvironmentIdAtom);
     if (environmentId === undefined) {
       return Effect.fail(
         new ServerNpmReleaseError({ reason: "Connect to a server to check releases." }),

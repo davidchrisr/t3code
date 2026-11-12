@@ -62,7 +62,7 @@ The host's tunnel is up, but it cannot reach T3 Code on the host. Common causes:
 - T3 Code on the host stopped, crashed, or is still starting.
 - T3 Code restarted on a different port, for example after an update, and the
   tunnel still points at the old port.
-- The server binds only one network address with `T3CODE_HOST`. The tunnel
+- The server binds only one network address with `T3FORK_HOST`. The tunnel
   sends requests to `127.0.0.1`, so the server must also listen there.
 
 Fix: restart T3 Code on the host. For the background service, run
@@ -157,6 +157,6 @@ If none of this helps, open an issue on
 - The output of `t3 connect status` on the host.
 - The trace ID, if one is shown.
 - If the tunnel dropped earlier, the host's tunnel log, `relay-client.ndjson`
-  in the logs folder (`~/.t3/userdata/logs` by default). It records when the
+  in the logs folder (`~/.t3fork/userdata/logs` by default). It records when the
   tunnel connected, warned, exited, and restarted, with the tunnel token
   removed.

@@ -10,33 +10,21 @@ launch T3 Code and configure providers afterwards.
 
 ## Command line
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
+Install the fork's local `t3` command from Settings in the desktop app, or build
+the CLI from this checkout. The archive installers, `t3 service install`, and
+`t3 update` use [fork releases](https://github.com/davidchrisr/t3code/releases).
+They fail if the requested archive or checksums have not been published. To run
+an installer from this checkout, use `sh scripts/install.sh` on macOS or Linux,
+or `pwsh -File scripts/install.ps1` on Windows. npm bootstrap is disabled;
+`npx t3` installs upstream T3 Code.
 
-On Windows, in PowerShell:
-
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
-
-This installs the `t3` binary to `~/.local/bin`. If that folder is not on your
-`PATH` yet, the installer says so and, for zsh, bash on Linux, and fish, prints
-a command to add it. On Windows, `t3` works in the same PowerShell window right
-away; add the folder to your `PATH` for new windows. If a `t3` that the
-installer or the desktop app did not create is already there, it leaves that
-one alone and stops. Set `T3CODE_CHANNEL=nightly` to install the nightly train, or
-`T3CODE_VERSION` to pin an exact version.
-
-| Task                                             | Command                                                                 |
-| ------------------------------------------------ | ----------------------------------------------------------------------- |
-| Start the server and open the web app            | `t3`                                                                    |
-| Start the server without a browser               | `t3 serve`                                                              |
-| Use it from your other devices                   | `t3 up` ([details](./remote-access.md))                                 |
-| Keep it running in the background (macOS, Linux) | `t3 service install` ([details](./background-service.md))               |
-| Move to the newest release                       | `t3 update`                                                             |
-| Reclaim database space                           | `t3 doctor` ([details](./background-service.md#reclaim-database-space)) |
-| Remove it again                                  | `t3 uninstall`                                                          |
+| Task                                  | Command             |
+| ------------------------------------- | ------------------- |
+| Start the server and open the web app | `t3`                |
+| Start the server without a browser    | `t3 serve`          |
+| Inspect an existing service           | `t3 service status` |
+| Reclaim database space                | `t3 doctor`         |
+| Remove the CLI                        | `t3 uninstall`      |
 
 Run `t3 help` or `t3 --help` for the full reference. To start in a new working
 directory, use an explicit path such as `t3 ./my-project`. A bare directory name
@@ -45,13 +33,6 @@ is accepted only if it already exists.
 If `t3` or `t3 start` reports an already running server, connect to that server
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
-
-To try T3 Code once without installing it, run `npx t3@latest` instead (needs
-Node.js for `npx`). It offers to install the `t3` command first. If you say no,
-it asks again at the next minor release, and `npx t3 install` installs it later.
-`npx t3` always runs the version npm picked, even when a `t3` is installed. On
-the nightly train, run your installed `t3` (for example `t3 connect`), not
-`npx t3`, which runs the latest stable release.
 
 ### Intel Macs
 
@@ -70,18 +51,22 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Fork desktop builds use `T3FORK_HOME` for their data directory and ignore
-`T3CODE_HOME`. The default remains `~/.t3`; the fork's bundled `t3` command uses
-the same directory. To run an upstream recovery app alongside the fork, give
-upstream a separate `T3CODE_HOME`, such as `~/.t3-recovery`, and keep
-`T3FORK_HOME` pointed at your existing fork data. Restart each app after changing
-these variables, and keep the directories separate.
+Fork builds use `~/.t3fork` and port `4773` by default. Set `T3FORK_HOME` or
+`T3FORK_PORT` to override them. The fork ignores upstream `T3CODE_*` settings;
+upstream keeps its own home and port settings. Install the shared `t3` command
+from only the app you want to own it.
 
-On macOS, use launchd environment settings or a launcher that supplies the variables;
-Finder and Dock launches do not inherit shell-profile changes. Install the shared
-`t3` command from only the app you want to own it.
+To move existing fork data from `~/.t3`, quit the fork and confirm its backend
+has stopped. Copy the entire directory to a new `~/.t3fork` before starting the
+updated fork. Keep the original as a backup, and never copy a running database.
+If `~/.t3fork` already exists, resolve that destination before copying.
 
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
+On macOS, Finder and Dock launches do not inherit shell-profile changes. Use
+launchd environment settings or a launcher when overriding the defaults.
+
+### Upstream recovery app
+
+For a separate upstream recovery app, download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
 or use a package manager:
 
 | Platform           | Install                                                      |

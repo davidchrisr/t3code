@@ -38,26 +38,11 @@ below.
 
 ## Switch between Stable and Nightly
 
-In the desktop app, change **Settings → About → Update track**. T3 Code shows each
-connected machine it will move and each one it skips, then moves them in one
-step. Remote servers install the latest release on the new track. Remote desktop
-apps reinstall on the new track. This app reinstalls last. Your threads,
-settings, and data stay.
-
-A background service cannot move to an older release remotely. When Stable is
-older than its Nightly, run `t3 update --channel stable --allow-downgrade` on
-that machine.
-
-A switch is blocked for a machine whose database already has changes the
-target release does not support, or when T3 Code cannot confirm that it does.
-The dialog says why: update a machine on its current track first when its
-release is too old to check, or wait until the target track includes the
-changes. A Mac running the desktop app must switch on that Mac.
-
-Each machine keeps the new track even if its switch did not finish, but it
-moves to that track only through a switch. **Update track** shows how many
-machines still run the other track. **Review** opens the same dialog with fresh
-checks.
+Automatic track switching is unavailable in this fork. Download a fork build
+from the desired track, stop the app or server, and install that build manually.
+Back up the fork's data before switching: an older build may not support database
+changes made by a newer one. If it refuses to open the database, keep using the
+newer build or restore a compatible backup.
 
 ## Before you update
 
@@ -103,10 +88,11 @@ The offered action depends on how the server runs:
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Update server**          | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host. |
 | **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
-| **Copy update command**    | Run the command on the named host to update the detected global npm install, then restart the server with your usual options.                                                                   |
-| **Copy relaunch command**  | Stop the command-line server on its host and relaunch with the copied command, keeping your usual subcommand and options. This does not update an installed `t3` command.                       |
+| **Copy update command**    | Run the command on the named host to update the installed CLI, then restart the server with that executable and your usual options.                                                             |
+| **Copy relaunch command**  | For an explicitly detected npm runner, stop the server on its host and relaunch with the copied command and your usual options. This does not update an installed `t3` command.                 |
 
-On the host, run:
+For a fork server, use the fork's `t3` CLI on the named host, using its full path
+if it is not on `PATH`. Run:
 
 ```sh
 t3 update <client-version>
@@ -118,9 +104,10 @@ asks before restarting the background service; if you decline, run
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
 
-If you run the server with `npx` rather than an installed `t3`, there is
-nothing to update on the host: stop the server and relaunch it as
-`npx t3@<client-version>` with the same subcommand and options.
+If you run a fork executable directly, stop the server, install the matching
+fork build, and relaunch it with the same subcommand and options. npm's `t3`
+package runs upstream T3 Code. For a source run, update and rebuild that checkout
+instead of expecting `t3 update` to change it.
 
 ## If an update fails
 

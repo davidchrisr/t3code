@@ -28,14 +28,14 @@ export class CliInstallError extends Schema.TaggedError<CliInstallError>()("CliI
   }
 }
 
-/** `<T3 home>/runtime/versions/<version>/t3`: the layout the install scripts and npm launcher share. */
+/** `<T3 home>/runtime/fork-versions/<version>/t3`: the fork archive installation layout. */
 const standaloneRuntime = Effect.gen(function* () {
   const path = yield* Path.Path;
   if (!(yield* HostProcess.IsExecutable)) return Option.none();
   const executable = yield* HostProcess.ExecutablePath;
   const versionsDir = path.dirname(path.dirname(executable));
   const runtimeDir = path.dirname(versionsDir);
-  if (path.basename(versionsDir) !== "versions" || path.basename(runtimeDir) !== "runtime") {
+  if (path.basename(versionsDir) !== "fork-versions" || path.basename(runtimeDir) !== "runtime") {
     return Option.none();
   }
   return Option.some({ executable, versionsDir, runtimeDir });
@@ -51,23 +51,20 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   const runtime = yield* standaloneRuntime;
   const windows = platform === "win32";
   if (Option.isNone(runtime)) {
-    const script = windows
-      ? "irm https://t3.codes/install.ps1 | iex"
-      : "curl -fsSL https://t3.codes/install.sh | sh";
     return yield* new CliInstallError({
-      reason: `Only the standalone t3 can install itself. Use \`${script}\`, or Settings in the desktop app.`,
+      reason: `Only the standalone fork CLI can install itself. Install the command from Settings in the fork desktop app, or use a fork-built standalone t3@${packageJson.version}.`,
     });
   }
   const { executable, versionsDir, runtimeDir } = runtime.value;
   // cmd.exe expands `%` and reads the shim in the OEM code page, so such a path would not run.
   if (windows && /[%\u0080-\uffff]/.test(executable)) {
     return yield* new CliInstallError({
-      reason: `A t3.cmd cannot run ${executable}, because the path has % or non-ASCII characters. Keep using npx t3.`,
+      reason: `A t3.cmd cannot run ${executable}, because the path has % or non-ASCII characters. Run the fork executable directly, or move it to a path without these characters.`,
     });
   }
   // Absolute, so the PATH hint never adds a folder that changes with the working directory.
   const binDir = path.resolve(
-    environment.T3CODE_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
+    environment.T3FORK_INSTALL_BIN_DIR?.trim() || path.join(home, ".local", "bin"),
   );
   const name = windows ? "t3.cmd" : "t3";
   const link = path.join(binDir, name);

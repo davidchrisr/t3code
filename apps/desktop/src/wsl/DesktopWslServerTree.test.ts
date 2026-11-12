@@ -36,7 +36,7 @@ const layerEnvironment = (input: {
         NodeServices.layer,
         DesktopConfig.layerTest({
           T3FORK_HOME: input.baseDir,
-          T3CODE_MODE: "desktop",
+          T3FORK_MODE: "desktop",
         }),
       ),
     ),

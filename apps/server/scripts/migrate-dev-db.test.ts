@@ -7,6 +7,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../src/persistence/Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import { runMigrateDevDb } from "./migrate-dev-db.ts";
 
 const withDatabase = <A, E>(
@@ -410,6 +411,29 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         { sharedHome: sourceDir },
       ).pipe(Effect.flip);
       assert.equal(error._tag, "MigrateDevDbSharedHomeError");
+
+      const path = yield* Path.Path;
+      const installedHome = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-installed-homes-",
+      });
+      const forkHome = path.join(installedHome, ".t3fork");
+      for (const name of [".t3", ".t3fork"]) {
+        const protectedHome = path.join(installedHome, name);
+        yield* fs.makeDirectory(protectedHome, { recursive: true });
+        const destinations = [protectedHome];
+        if (symlinksSupported) {
+          const alias = path.join(installedHome, `${name}-alias`);
+          yield* fs.symlink(protectedHome, alias);
+          destinations.push(alias);
+        }
+        for (const destination of destinations) {
+          const protectedError = yield* runMigrateDevDb(
+            { baseDir: destination, source, projects: 5, threadsPerProject: 10 },
+            { sharedHome: forkHome },
+          ).pipe(Effect.flip);
+          assert.equal(protectedError._tag, "MigrateDevDbSharedHomeError");
+        }
+      }
     }),
   );
 });

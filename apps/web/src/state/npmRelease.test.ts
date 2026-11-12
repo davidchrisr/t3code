@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 
-import { npmReleaseAtom, npmReleaseFailureMessage } from "./npmRelease";
+import { npmReleaseAtom, npmReleaseFailureMessage, npmReleaseSupportedAtom } from "./npmRelease";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { serverEnvironment } from "./server";
 
@@ -86,6 +86,7 @@ it.effect(
       registry.set(primaryEnvironmentIdAtom, first);
       const unmount = registry.mount(release);
       try {
+        expect(registry.get(npmReleaseSupportedAtom)).toBe(true);
         expect(
           yield* AtomRegistry.getResult(registry, release, { suspendOnWaiting: true }),
         ).toEqual({
@@ -134,6 +135,9 @@ it.effect("resolves track metadata through a supporting server when there is no 
 it.effect("does not call an unsupported RPC or fetch public npm for an older primary server", () =>
   Effect.gen(function* () {
     const query = setup(false);
+    vi.mocked(serverEnvironment.configValueAtom).mockImplementation((environmentId) =>
+      Atom.make(configFor(environmentId, environmentId === second)),
+    );
     using fetch = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("Unexpected browser fetch"));
@@ -146,12 +150,17 @@ it.effect("does not call an unsupported RPC or fetch public npm for an older pri
     const release = npmReleaseAtom("latest");
     const unmount = registry.mount(release);
     try {
+      expect(registry.get(npmReleaseSupportedAtom)).toBe(false);
       const error = yield* AtomRegistry.getResult(registry, release).pipe(Effect.flip);
       expect(npmReleaseFailureMessage(Cause.fail(error))).toContain(
-        "Update it before switching tracks",
+        "Install the desired build manually",
       );
       expect(query).not.toHaveBeenCalled();
       expect(fetch).not.toHaveBeenCalled();
+      query.mockReturnValue(Atom.make(AsyncResult.success({ version })));
+      registry.set(primaryEnvironmentIdAtom, null);
+      expect(registry.get(npmReleaseSupportedAtom)).toBe(true);
+      expect(query).toHaveBeenCalledWith({ environmentId: second, input: { spec: "latest" } });
     } finally {
       unmount();
       registry.dispose();

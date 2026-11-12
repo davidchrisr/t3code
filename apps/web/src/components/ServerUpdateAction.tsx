@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { npmReleaseSupportedAtom } from "~/state/npmRelease";
 import {
   AuthEnvironmentMaintainScope,
   type AuthSessionState,
@@ -76,7 +77,14 @@ function refusedCrossing(
 }
 
 function CrossTrackNote() {
-  return <span className="text-muted-foreground text-xs">{CROSS_TRACK_NOTE}</span>;
+  const supported = useAtomValue(npmReleaseSupportedAtom);
+  return (
+    <span className="text-muted-foreground text-xs">
+      {supported
+        ? CROSS_TRACK_NOTE
+        : "Automatic track switching is unavailable. Install a compatible build manually."}
+    </span>
+  );
 }
 
 function updateFailureMessage(error: unknown): string {
@@ -270,22 +278,24 @@ export function ServerUpdateAction({
   appearance = "button",
 }: ServerUpdateTarget & UpdateButtonProps) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
+  const updatesInstalledCli = installation === undefined || installation.kind === "npm-global";
   const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
   const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId));
   const update = useServerUpdate();
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
+    target: updatesInstalledCli ? "update command" : "relaunch command",
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title:
-          installation?.kind === "npm-global" ? "Update command copied" : "Relaunch command copied",
+        title: updatesInstalledCli ? "Update command copied" : "Relaunch command copied",
         description:
-          installation?.kind === "npm-global"
-            ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
-            : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
+          installation === undefined
+            ? `On ${serverLabel}, run \`${command}\` with the CLI matching this server, using its full path if it is not on PATH. For a fork server, use the fork CLI. This updates the installed CLI; restart the server with that executable and your usual options. For a source run, update and rebuild the checkout instead.`
+            : installation.kind === "npm-global"
+              ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
+              : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
       });
     },
     onError: (error) => {
@@ -351,7 +361,7 @@ export function ServerUpdateAction({
     selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
   const actionLabel =
     manualCommand !== null
-      ? installation?.kind === "npm-global"
+      ? updatesInstalledCli
         ? "Copy update command"
         : "Copy relaunch command"
       : label;

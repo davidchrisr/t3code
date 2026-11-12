@@ -38,10 +38,17 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
         "[Service]\nMemoryLow=2G\nOOMScoreAdjust=-900\n",
       );
       expect(theo.managerDefaults.path).toBe(
-        "/home/theo/.config/systemd/user.conf.d/90-t3code-protect.conf",
+        "/home/theo/.config/systemd/user.conf.d/90-t3fork-protect.conf",
       );
       expect(theo.oomUnits).toEqual(["user@1000.service", "tailscaled.service", "ssh.service"]);
 
+      const upstreamPaths = theo.system.map(({ path }) =>
+        NodePath.join(NodePath.dirname(path), "90-t3code-protect.conf"),
+      );
+      for (const path of upstreamPaths) {
+        NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+        NodeFS.writeFileSync(path, "[Service]\n# upstream protection\n");
+      }
       const unrelated = NodePath.join(systemUnitDir, "ssh.service.d", "50-admin.conf");
       NodeFS.mkdirSync(NodePath.dirname(unrelated), { recursive: true });
       NodeFS.writeFileSync(unrelated, "[Service]\nNice=1\n");
@@ -79,12 +86,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
         expect(result.status).toBe(0);
       };
       const exists = (unit: string) =>
-        NodeFS.existsSync(NodePath.join(systemUnitDir, `${unit}.d`, "90-t3code-protect.conf"));
+        NodeFS.existsSync(NodePath.join(systemUnitDir, `${unit}.d`, "90-t3fork-protect.conf"));
 
       runScript(theo, "apply");
       runScript(plan(1001, []), "apply");
       for (const { path, contents } of theo.system) {
         expect(NodeFS.readFileSync(path, "utf8")).toBe(contents);
+      }
+      for (const path of upstreamPaths) {
+        expect(NodeFS.readFileSync(path, "utf8")).toBe("[Service]\n# upstream protection\n");
       }
       expect(NodeFS.readFileSync(`/proc/${target.pid}/oom_score_adj`, "utf8").trim()).toBe("900");
       expect(NodeFS.readFileSync(calls, "utf8").split("\n")[0]).toBe("daemon-reload");
@@ -99,7 +109,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("renderPrivileg
 
       runScript(undo(1001), "undo");
       for (const { path } of undo(1001).system) expect(NodeFS.existsSync(path)).toBe(false);
-      expect(NodeFS.existsSync(NodePath.join(systemUnitDir, "user.slice.d"))).toBe(false);
+      for (const path of upstreamPaths) {
+        expect(NodeFS.readFileSync(path, "utf8")).toBe("[Service]\n# upstream protection\n");
+      }
       expect(NodeFS.readFileSync(unrelated, "utf8")).toBe("[Service]\nNice=1\n");
     } finally {
       target.kill();
@@ -233,7 +245,7 @@ it.effect("counts memory.min as protection and names the first cgroup that grant
     "user-1000.slice",
     "user@1000.service",
     "app.slice",
-    "t3code.service",
+    "t3fork.service",
   ];
   const write = (depth: number, file: string, value: string) => {
     const directory = NodePath.join(root, ...controlGroup.slice(0, depth));

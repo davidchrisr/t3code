@@ -1,11 +1,8 @@
+import { CLI_RELEASES_PAGE_URL } from "@t3tools/shared/cliRelease";
 import { cn } from "~/lib/utils";
 
 import { CommandBlock } from "./CommandBlock";
 
-/**
- * Setup steps for another computer: install `t3`, then run `command`. Both installers are shown
- * because the browser showing this is often not the computer being set up.
- */
 export function InstallT3Commands({
   command,
   className,
@@ -15,16 +12,22 @@ export function InstallT3Commands({
 }) {
   return (
     <div className={cn("space-y-2", className)}>
-      <p className="text-xs text-muted-foreground">macOS, Linux</p>
-      <CommandBlock command="curl -fsSL https://t3.codes/install.sh | sh" />
-      <p className="text-xs text-muted-foreground">Windows (PowerShell)</p>
-      <CommandBlock command="irm https://t3.codes/install.ps1 | iex" />
-      <p className="text-xs text-muted-foreground">Then</p>
+      <p className="text-xs text-muted-foreground">
+        Download and unpack the CLI archive for that computer from{" "}
+        <a
+          href={CLI_RELEASES_PAGE_URL}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="underline underline-offset-2"
+        >
+          T3 Fork releases
+        </a>
+        .
+      </p>
       <CommandBlock command={command} />
       <p className="text-xs text-muted-foreground">
-        Skip the install if you already have <code className="font-mono">t3</code>. If{" "}
-        <code className="font-mono">t3</code> is not found after installing, add the folder the
-        installer names to your PATH.
+        Run this with the fork's <code className="font-mono">t3</code> executable, using its full
+        path if it is not on PATH.
       </p>
     </div>
   );

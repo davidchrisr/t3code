@@ -557,7 +557,7 @@ it.effect.each(
       Effect.withTracerEnabled(true),
       Effect.provideService(
         ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown({ T3CODE_PROVIDER_COMMIT_BATCHING: true }),
+        ConfigProvider.fromUnknown({ T3FORK_PROVIDER_COMMIT_BATCHING: true }),
       ),
     );
   },

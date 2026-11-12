@@ -39,7 +39,7 @@ const run = (shim: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv =
   });
 
 const REPORTER =
-  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$T3CODE_CLI_PATH home=$T3CODE_HOME"\nprintf "%s\\n" "$@"\nexit 3\n';
+  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$T3FORK_CLI_PATH home=$T3FORK_HOME"\nprintf "%s\\n" "$@"\nexit 3\n';
 
 const fakeAppImage = (canMount = true) => {
   const root = tempRoot();
@@ -128,8 +128,8 @@ describe("renderCliShim", () => {
       (line) => line.includes("whoami") && !/"[^"]*whoami[^"]*"/.test(line),
     );
     expect(bare).toEqual([]);
-    expect(lines).toContain('set "T3CODE_CLI_PATH=C:\\Users\\José\\.t3\\bin\\t3.cmd"');
-    expect(lines).toContain('set "T3CODE_HOME=%T3FORK_HOME%"');
-    expect(lines).toContain('if not defined T3CODE_HOME set "T3CODE_HOME=C:\\Users\\José\\.t3"');
+    expect(lines).toContain('set "T3FORK_CLI_PATH=C:\\Users\\José\\.t3\\bin\\t3.cmd"');
+    expect(lines).toContain('set "T3FORK_HOME=%T3FORK_HOME%"');
+    expect(lines).toContain('if not defined T3FORK_HOME set "T3FORK_HOME=C:\\Users\\José\\.t3"');
   });
 });

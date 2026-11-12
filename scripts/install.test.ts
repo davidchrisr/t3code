@@ -21,7 +21,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
     const homeName = "-custom home\\home\n";
     const home = NodePath.join(root, homeName);
     const version = "1.2.3";
-    const target = NodePath.join(home, "runtime/versions", version);
+    const target = NodePath.join(home, "runtime/fork-versions", version);
     const launcher = NodePath.join(root, "bin/t3");
     try {
       await NodeFSP.mkdir(target, { recursive: true });
@@ -37,10 +37,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer home
           env: {
             ...process.env,
             HOME: root,
-            T3CODE_HOME: homeName,
-            T3CODE_VERSION: version,
-            T3CODE_INSTALL_BIN_DIR: NodePath.dirname(launcher),
-            T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:1",
+            T3FORK_HOME: homeName,
+            T3FORK_VERSION: version,
+            T3FORK_INSTALL_BIN_DIR: NodePath.dirname(launcher),
+            T3FORK_RELEASE_BASE_URL: "http://127.0.0.1:1",
           },
           encoding: "utf8",
         },
@@ -68,15 +68,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
     ["preview", "1.2.4-preview.20261019.50", 0],
   ])("finds %s %s behind nightlies and %i HTTP 504s", async (channel, version, failures) => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-install-index-"));
-    const target = NodePath.join(root, "home/runtime/versions", version);
+    const target = NodePath.join(root, "home/runtime/fork-versions", version);
     const server = NodeHttp.createServer((request, response) => {
       if (failures-- > 0) return response.writeHead(504).end();
       const url = new URL(request.url ?? "/", "http://fixture");
       const body =
-        url.pathname === "/pingdotgg/t3code/releases/latest" &&
+        url.pathname === "/davidchrisr/t3code/releases/latest" &&
         request.headers.accept === "application/json"
           ? { tag_name: "v1.2.3" }
-          : url.pathname === "/repos/pingdotgg/t3code/releases"
+          : url.pathname === "/repos/davidchrisr/t3code/releases"
             ? { "1": nightlies, "2": [{ tag_name: `v${version}` }, { tag_name: "v1.2.3" }] }[
                 url.searchParams.get("page") ?? ""
               ]
@@ -104,12 +104,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
           const child = NodeChildProcess.spawn("sh", [installer], {
             env: {
               ...process.env,
-              T3CODE_VERSION: "",
-              T3CODE_CHANNEL: channel,
-              T3CODE_HOME: NodePath.join(root, "home"),
-              T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
+              T3FORK_VERSION: "",
+              T3FORK_CHANNEL: channel,
+              T3FORK_HOME: NodePath.join(root, "home"),
+              T3FORK_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
               // A wrong version must fail here instead of downloading a real release.
-              T3CODE_RELEASE_BASE_URL: origin,
+              T3FORK_RELEASE_BASE_URL: origin,
             },
             stdio: ["ignore", "pipe", "pipe"],
           });
@@ -138,7 +138,7 @@ async function installOver(input: {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
 }) {
-  const target = NodePath.join(input.home, "runtime", "versions", "1.2.3");
+  const target = NodePath.join(input.home, "runtime", "fork-versions", "1.2.3");
   await NodeFSP.mkdir(target, { recursive: true });
   await NodeFSP.writeFile(NodePath.join(target, ".install-complete"), "1.2.3\n");
   const installer = NodePath.resolve(import.meta.dirname, input.script);
@@ -151,11 +151,11 @@ async function installOver(input: {
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     env: {
       ...process.env,
-      T3CODE_CHANNEL: "",
-      T3CODE_VERSION: "1.2.3",
-      T3CODE_HOME: input.home,
-      T3CODE_INSTALL_BIN_DIR: input.binDir,
-      T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:9",
+      T3FORK_CHANNEL: "",
+      T3FORK_VERSION: "1.2.3",
+      T3FORK_HOME: input.home,
+      T3FORK_INSTALL_BIN_DIR: input.binDir,
+      T3FORK_RELEASE_BASE_URL: "http://127.0.0.1:9",
       ...input.env,
     },
   });
@@ -190,23 +190,23 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       await NodeFSP.rm(link);
       await NodeFSP.mkdir(NodePath.join(home, "other"), { recursive: true });
       await NodeFSP.writeFile(NodePath.join(home, "other/t3"), "#!/bin/sh\n");
-      await NodeFSP.symlink(`${home}/runtime/versions/../../other/t3`, link);
+      await NodeFSP.symlink(`${home}/runtime/fork-versions/../../other/t3`, link);
       const climbing = await installOver({ script: "install.sh", home, binDir });
       expect(climbing.code).not.toBe(0);
-      expect(await NodeFSP.readlink(link)).toBe(`${home}/runtime/versions/../../other/t3`);
+      expect(await NodeFSP.readlink(link)).toBe(`${home}/runtime/fork-versions/../../other/t3`);
 
       // Only `<version>/t3` counts, not another program inside a version.
       await NodeFSP.rm(link);
-      await NodeFSP.symlink(NodePath.join(home, "runtime/versions/1.0.0/helper"), link);
+      await NodeFSP.symlink(NodePath.join(home, "runtime/fork-versions/1.0.0/helper"), link);
       const sibling = await installOver({ script: "install.sh", home, binDir });
       expect(sibling.code).not.toBe(0);
       expect(await NodeFSP.readlink(link)).toBe(
-        NodePath.join(home, "runtime/versions/1.0.0/helper"),
+        NodePath.join(home, "runtime/fork-versions/1.0.0/helper"),
       );
 
       // An upgrade over an older version's link, written through a symlinked T3 home.
       await NodeFSP.rm(link);
-      await NodeFSP.symlink(NodePath.join(home, "runtime/versions/1.0.0/t3"), link);
+      await NodeFSP.symlink(NodePath.join(home, "runtime/fork-versions/1.0.0/t3"), link);
       await NodeFSP.symlink(home, NodePath.join(root, "alias"));
       const upgrade = await installOver({
         script: "install.sh",
@@ -216,7 +216,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
       });
       expect(upgrade.code, upgrade.output).toBe(0);
       expect(await NodeFSP.readlink(link)).toBe(
-        NodePath.join(root, "alias/runtime/versions/1.2.3/t3"),
+        NodePath.join(root, "alias/runtime/fork-versions/1.2.3/t3"),
       );
       expect(upgrade.output).toContain(
         `printf '\\n%s\\n' 'export PATH="$PATH:$HOME/bin"' >> ~/.zshrc`,
@@ -261,7 +261,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("install.sh t3 
         binDir: `${binDir}/`,
       });
       expect(overDesktop.code, overDesktop.output).toBe(0);
-      expect(await NodeFSP.readlink(link)).toBe(NodePath.join(home, "runtime/versions/1.2.3/t3"));
+      expect(await NodeFSP.readlink(link)).toBe(
+        NodePath.join(home, "runtime/fork-versions/1.2.3/t3"),
+      );
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -286,19 +288,19 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
       expect(await NodeFSP.readFile(shim, "utf8")).toBe(desktopShim);
 
       // A hand-edited wrapper may set its own environment; replacing it would drop that.
-      const edited = `@echo off\r\nset "T3CODE_HOME=D:\\other"\r\n"${NodePath.join(home, "runtime", "versions", "1.0.0", "t3.exe")}" %*`;
+      const edited = `@echo off\r\nset "T3FORK_HOME=D:\\other"\r\n"${NodePath.join(home, "runtime", "fork-versions", "1.0.0", "t3.exe")}" %*`;
       await NodeFSP.writeFile(shim, edited, "utf8");
       const wrapper = await installOver({ script: "install.ps1", home, binDir });
       expect(wrapper.code).not.toBe(0);
       expect(await NodeFSP.readFile(shim, "utf8")).toBe(edited);
 
-      const climbing = `@echo off\r\n"${NodePath.join(home, "runtime", "versions")}\\..\\other\\t3.exe" %*`;
+      const climbing = `@echo off\r\n"${NodePath.join(home, "runtime", "fork-versions")}\\..\\other\\t3.exe" %*`;
       await NodeFSP.writeFile(shim, climbing, "utf8");
       const outside = await installOver({ script: "install.ps1", home, binDir });
       expect(outside.code).not.toBe(0);
       expect(await NodeFSP.readFile(shim, "utf8")).toBe(climbing);
 
-      const older = NodePath.join(home, "runtime", "versions", "1.0.0", "t3.exe");
+      const older = NodePath.join(home, "runtime", "fork-versions", "1.0.0", "t3.exe");
       await NodeFSP.writeFile(shim, `@echo off\r\n"${older}" %*`, "utf8");
       const upgrade = await installOver({ script: "install.ps1", home, binDir });
       expect(upgrade.code, upgrade.output).toBe(0);
@@ -354,11 +356,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("install.ps1 t3
 describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer checksum", () => {
   it.each(
     ["home\\data", "home\ndata"].flatMap((homeName) =>
-      [true, false].map((validChecksum) => ({ homeName, validChecksum })),
+      [
+        { validChecksum: true, missingChecksums: false },
+        { validChecksum: false, missingChecksums: false },
+        { validChecksum: false, missingChecksums: true },
+      ].map((entry) => ({ homeName, ...entry })),
     ),
   )(
-    "verifies home $homeName with valid checksum $validChecksum",
-    async ({ homeName, validChecksum }) => {
+    "verifies home $homeName with valid checksum $validChecksum, missing checksums $missingChecksums",
+    async ({ homeName, validChecksum, missingChecksums }) => {
       const availableTools = ["sha256sum", "shasum"].filter(
         (tool) =>
           NodeChildProcess.spawnSync("sh", ["-c", 'command -v "$1"', "sh", tool]).status === 0,
@@ -407,6 +413,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
           const archive = await NodeFSP.readFile(archivePath);
           const digest = NodeCrypto.createHash("sha256").update(archive).digest("hex");
           server.on("request", (request, response) => {
+            if (missingChecksums) return response.writeHead(404).end();
             response.end(
               request.url?.endsWith("/SHA256SUMS")
                 ? `${validChecksum ? digest : "0".repeat(64)}  ${archiveName}\n`
@@ -425,10 +432,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
                   env: {
                     ...process.env,
                     PATH: tools,
-                    T3CODE_VERSION: version,
-                    T3CODE_HOME: home,
-                    T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
-                    T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+                    T3FORK_VERSION: version,
+                    T3FORK_HOME: home,
+                    T3FORK_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
+                    T3FORK_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
                   },
                   stdio: ["ignore", "pipe", "pipe"],
                 },
@@ -440,7 +447,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
               child.on("close", (code) => resolve({ code, output }));
             },
           );
-          const versions = NodePath.join(home, "runtime/versions");
+          const versions = NodePath.join(home, "runtime/fork-versions");
           if (validChecksum) {
             expect(code, `${checksumTool}: ${output}`).toBe(0);
             expect(
@@ -453,7 +460,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chec
             ).toBe("t3 v1.2.3");
           } else {
             expect(code).not.toBe(0);
-            expect(output).toContain("checksum mismatch");
+            expect(output).toContain(
+              missingChecksums ? "the fork has no release archive" : "checksum mismatch",
+            );
+            expect(output).not.toContain("npm install -g");
             expect(output).not.toContain("Installed T3 Code");
             expect(await NodeFSP.readdir(versions)).toEqual([]);
           }

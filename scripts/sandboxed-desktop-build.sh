@@ -248,7 +248,7 @@ main() {
     "npm_config_store_dir=$cache_dir/pnpm" "npm_config_cache=$cache_dir/npm"
     "pnpm_config_store_dir=$cache_dir/pnpm" "pnpm_config_cache_dir=$cache_dir/pnpm-cache"
     "GIT_CEILING_DIRECTORIES=$build_root"
-    "T3CODE_BUILD_OUTPUT=$output_dir" "T3CODE_BUILD_ARCH=$arch"
+    "T3FORK_BUILD_OUTPUT=$output_dir" "T3FORK_BUILD_ARCH=$arch"
     "ELECTRON_CACHE=$cache_dir/electron" "ELECTRON_BUILDER_CACHE=$cache_dir/electron-builder"
     'ELECTRON_SKIP_BINARY_DOWNLOAD=1' 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1'
     'CI=1' 'LANG=en_US.UTF-8' 'TERM=dumb' 'NO_COLOR=1'
@@ -274,8 +274,8 @@ main() {
   [[ $(cat -- "$probe_dir/denied") == 'outside sandbox' ]] || fail 'Isolation failed: log writer changed an outside file'
   # Exercise a subprocess as well as the parent shell before running package scripts.
   # shellcheck disable=SC2016 # These variables expand in the sandboxed child shells.
-  T3CODE_SANDBOX_PROBE_PARENT=parent-only run_logged "$run_dir/isolation.log" /bin/sh -eu -c '
-    if [ "${T3CODE_SANDBOX_PROBE_PARENT+x}" = x ]; then
+  T3FORK_SANDBOX_PROBE_PARENT=parent-only run_logged "$run_dir/isolation.log" /bin/sh -eu -c '
+    if [ "${T3FORK_SANDBOX_PROBE_PARENT+x}" = x ]; then
       printf "Isolation failed: parent environment leaked into the child\n" >&2; exit 1
     fi
     printf "allowed\n" > "$1/probe"
@@ -297,7 +297,7 @@ main() {
 
   local commit_hash
   commit_hash=$(git -C "$project_dir" rev-parse --verify HEAD)
-  build_env+=("T3CODE_COMMIT_HASH=$commit_hash")
+  build_env+=("T3FORK_COMMIT_HASH=$commit_hash")
   git -C "$project_dir" ls-files -z --cached --others --exclude-standard --deduplicate \
     -- . ':!.repos' ':!git_old' ':!.local' \
     >"$run_dir/source-files.all"
@@ -306,7 +306,7 @@ main() {
     # Filter before --files-from: rsync may create implied parent directories
     # even when a directory exclusion would have pruned a recursive traversal.
     case /$source_file/ in
-      */.git/* | */git_old/* | */.local/* | */.repos/* | */.t3/* | */.codex/* | */.aws/* | */.agents/* | \
+      */.git/* | */git_old/* | */.local/* | */.repos/* | */.t3fork/* | */.codex/* | */.aws/* | */.agents/* | \
         */.env*/* | */.npmrc/* | */node_modules/* | */dist/* | */dist-electron/* | */dist-exe/* | \
         */target/* | */release/* | */release-mock/* | */.vite-plus/* | */.turbo/*) continue ;;
     esac

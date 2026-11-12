@@ -5,9 +5,10 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
 
-import { assert, describe, it } from "vite-plus/test";
+import { assert, describe, it, vi } from "vite-plus/test";
 
 import {
+  ensureMacIconIcns,
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
@@ -15,14 +16,42 @@ import {
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
+vi.mock("node:child_process", { spy: true });
+
 describe("electron development launcher", () => {
+  it("regenerates cached launcher artwork when switching to the nightly icon", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-icon-cache-"));
+    try {
+      for (const name of ["icon-dev.icns", "icon-prod.icns"]) {
+        const cached = NodePath.join(directory, name);
+        NodeFS.writeFileSync(cached, "stale artwork");
+        const cachedTime = new Date("2040-01-01T00:00:00Z");
+        NodeFS.utimesSync(cached, cachedTime, cachedTime);
+      }
+      using conversion = vi
+        .spyOn(NodeChildProcess, "spawnSync")
+        .mockImplementation((command, args) => {
+          assert.include(["sips", "iconutil"], command);
+          if (command === "iconutil") {
+            NodeFS.writeFileSync(args[args.indexOf("-o") + 1], "nightly artwork");
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        });
+      const icon = ensureMacIconIcns(directory);
+      assert.isTrue(conversion.mock.calls.some(([command]) => command === "iconutil"));
+      assert.equal(NodeFS.readFileSync(icon, "utf8"), "nightly artwork");
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("uses captured values only as fallbacks for a live runner environment", () => {
     const environmentScript = makeDevelopmentEnvironmentScript({
       VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
-      T3CODE_PORT: "16566",
+      T3FORK_PORT: "16566",
       T3FORK_HOME: "/tmp/t3",
       T3CODE_HOME: "/recovery",
-      T3CODE_OTLP_PROTOCOL: "http/protobuf",
+      T3FORK_OTLP_PROTOCOL: "http/protobuf",
     });
 
     assert.include(
@@ -31,7 +60,7 @@ describe("electron development launcher", () => {
     );
     assert.include(
       environmentScript,
-      "if [ -z \"${T3CODE_OTLP_PROTOCOL:-}\" ]; then export T3CODE_OTLP_PROTOCOL='http/protobuf'; fi",
+      "if [ -z \"${T3FORK_OTLP_PROTOCOL:-}\" ]; then export T3FORK_OTLP_PROTOCOL='http/protobuf'; fi",
     );
     assert.notInclude(environmentScript, "\nexport VITE_DEV_SERVER_URL=");
     assert.include(

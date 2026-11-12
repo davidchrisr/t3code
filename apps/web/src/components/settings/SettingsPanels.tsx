@@ -1,3 +1,4 @@
+import { npmReleaseSupportedAtom } from "~/state/npmRelease";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -154,6 +155,7 @@ const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 function AboutVersionSection() {
+  const trackSwitchSupported = useAtomValue(npmReleaseSupportedAtom);
   const updateState = useDesktopUpdateState();
   const [switchChannel, setSwitchChannel] = useState<DesktopUpdateChannel | null>(null);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
@@ -335,7 +337,9 @@ function AboutVersionSection() {
         <SettingsRow
           {...searchableSetting("update-track")}
           description={
-            nightlyDeniedBy !== undefined ? (
+            !trackSwitchSupported ? (
+              "Update-track switching is unavailable on this server. Install the desired fork build manually."
+            ) : nightlyDeniedBy !== undefined ? (
               `${managedUpdatesMessage(nightlyDeniedBy)} Nightly builds are not available${
                 selectedUpdateChannel === "nightly"
                   ? "; switch to Stable to keep getting updates."
@@ -375,7 +379,7 @@ function AboutVersionSection() {
                 size="sm"
                 className="w-full sm:w-40"
                 aria-label="Update track"
-                disabled={switchChannel !== null || updateRun !== null}
+                disabled={!trackSwitchSupported || switchChannel !== null || updateRun !== null}
               >
                 <SelectValue>{channelSwitchLabel(selectedUpdateChannel)}</SelectValue>
               </SelectTrigger>

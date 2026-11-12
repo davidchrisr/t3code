@@ -45,53 +45,53 @@ describe("loadRepoEnv", () => {
     const env = {
       VITE_RELAY_OTLP_TRACES_TOKEN: "disabled-token",
       EXPO_PUBLIC_OTLP_TRACES_TOKEN: "disabled-mobile-token",
-      T3CODE_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
+      T3FORK_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
     };
     applyRepoEnv({ env, repoRoot: makeTemporaryDirectory() });
     expect(env).toEqual({
-      T3CODE_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
+      T3FORK_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
     });
   });
   it("applies process, root local, and root precedence in that order", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_root\nT3CODE_CLERK_JWT_TEMPLATE=template_root\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nT3CODE_RELAY_URL=https://root.example.test\n",
+      "T3FORK_CLERK_PUBLISHABLE_KEY=pk_root\nT3FORK_CLERK_JWT_TEMPLATE=template_root\nT3FORK_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nT3FORK_RELAY_URL=https://root.example.test\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_CLERK_JWT_TEMPLATE=template_local\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nT3CODE_RELAY_URL=https://local.example.test\n",
+      "T3FORK_CLERK_PUBLISHABLE_KEY=pk_local\nT3FORK_CLERK_JWT_TEMPLATE=template_local\nT3FORK_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nT3FORK_RELAY_URL=https://local.example.test\n",
     );
 
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3FORK_RELAY_URL).toBe(
       "https://local.example.test",
     );
     const env = loadRepoEnv({
       baseEnv: {
-        T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-        T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
-        T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-        T3CODE_RELAY_URL: "https://ci.example.test",
-        T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "disabled-relay-token",
+        T3FORK_CLERK_PUBLISHABLE_KEY: "pk_ci",
+        T3FORK_CLERK_JWT_TEMPLATE: "template_ci",
+        T3FORK_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+        T3FORK_RELAY_URL: "https://ci.example.test",
+        T3FORK_RELAY_CLIENT_OTLP_TRACES_TOKEN: "disabled-relay-token",
         VITE_RELAY_OTLP_TRACES_TOKEN: "disabled-vite-token",
         EXPO_PUBLIC_OTLP_TRACES_TOKEN: "disabled-mobile-token",
-        T3CODE_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
+        T3FORK_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
       },
       repoRoot,
     });
     expect(env).toMatchObject({
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
+      T3FORK_CLERK_PUBLISHABLE_KEY: "pk_ci",
+      T3FORK_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
       VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
       EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
+      T3FORK_CLERK_JWT_TEMPLATE: "template_ci",
       VITE_CLERK_JWT_TEMPLATE: "template_ci",
       EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
-      T3CODE_RELAY_URL: "https://ci.example.test",
-      VITE_T3CODE_RELAY_URL: "https://ci.example.test",
-      T3CODE_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
+      T3FORK_RELAY_URL: "https://ci.example.test",
+      VITE_T3FORK_RELAY_URL: "https://ci.example.test",
+      T3FORK_OTLP_TRACES_URL: "https://diagnostics.example.test/v1/traces",
     });
-    expect(env).not.toHaveProperty("T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN");
+    expect(env).not.toHaveProperty("T3FORK_RELAY_CLIENT_OTLP_TRACES_TOKEN");
     expect(env).not.toHaveProperty("VITE_RELAY_OTLP_TRACES_TOKEN");
     expect(env).not.toHaveProperty("EXPO_PUBLIC_OTLP_TRACES_TOKEN");
   });

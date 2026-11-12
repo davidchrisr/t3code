@@ -18,8 +18,8 @@ const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-install-" });
-  const runtimeDir = path.join(root, ".t3/runtime");
-  const executable = path.join(runtimeDir, "versions", VERSION, "t3");
+  const runtimeDir = path.join(root, ".t3fork/runtime");
+  const executable = path.join(runtimeDir, "fork-versions", VERSION, "t3");
   yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
   yield* fs.writeFileString(executable, "");
   const npmPackage = path.join(root, ".npm/_npx/abc/node_modules/t3");
@@ -38,8 +38,8 @@ const setup = Effect.gen(function* () {
       Effect.provideService(HostProcess.Environment, {
         PATH: "/usr/bin",
         SHELL: "/bin/zsh",
-        T3CODE_INSTALL_BIN_DIR: binDir,
-        T3CODE_NPM_LAUNCHER_PATH: path.join(npmPackage, "bin/t3.mjs"),
+        T3FORK_INSTALL_BIN_DIR: binDir,
+        T3FORK_NPM_LAUNCHER_PATH: path.join(npmPackage, "bin/t3.mjs"),
         ...env,
       }),
     );
@@ -52,8 +52,15 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { root, runtimeDir, executable, link, provide } = yield* setup;
+      const nonStandalone = yield* installCli().pipe(
+        Effect.provideService(HostProcess.IsExecutable, false),
+        provide,
+        Effect.flip,
+      );
+      assert.include(nonStandalone.message, "fork-built standalone");
+      assert.notInclude(nonStandalone.message, "t3.codes/install");
 
-      const older = path.join(runtimeDir, "versions/0.0.1/t3");
+      const older = path.join(runtimeDir, "fork-versions/0.0.1/t3");
       yield* fs.makeDirectory(path.dirname(link), { recursive: true });
       yield* fs.symlink(older, link);
       const installed = yield* provide(installCli());
@@ -63,9 +70,9 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
 
       // A link written through a symlinked T3 home is still ours.
       const alias = path.join(root, "alias");
-      yield* fs.symlink(path.join(root, ".t3"), alias);
+      yield* fs.symlink(path.join(root, ".t3fork"), alias);
       yield* fs.remove(link);
-      yield* fs.symlink(path.join(alias, "runtime/versions", VERSION, "t3"), link);
+      yield* fs.symlink(path.join(alias, "runtime/fork-versions", VERSION, "t3"), link);
       const onPath = yield* provide(installCli(), { PATH: `/usr/bin:${path.join(root, "bin")}/` });
       assert.isTrue(onPath.onPath);
       // Another t3 earlier on PATH still runs first, so `t3` would not run this one.
@@ -89,12 +96,12 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
 
       // Only `<version>/t3` is ours, not another program inside a version.
       yield* fs.remove(link);
-      yield* fs.symlink(path.join(runtimeDir, "versions/0.0.1/node"), link);
+      yield* fs.symlink(path.join(runtimeDir, "fork-versions/0.0.1/node"), link);
       const sibling = yield* provide(installCli()).pipe(Effect.flip);
       assert.include(sibling.message, "Another t3 is already at");
       // This home's desktop launcher is replaced, as install.sh does.
       yield* fs.remove(link);
-      yield* fs.symlink(path.join(root, ".t3/bin/t3"), link);
+      yield* fs.symlink(path.join(root, ".t3fork/bin/t3"), link);
       yield* provide(installCli());
       assert.equal(yield* fs.readLink(link), executable);
 
@@ -134,7 +141,7 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       assert.include(foreignShim.message, "Another t3 is already at");
       assert.equal(yield* fs.readFileString(shim), desktopShim);
       // A user's wrapper that also runs a managed t3.exe is still theirs.
-      const wrapper = `@echo off\r\nset FOO=1\r\n"${path.join(runtimeDir, "versions/0.0.1/t3.exe")}" %*`;
+      const wrapper = `@echo off\r\nset FOO=1\r\n"${path.join(runtimeDir, "fork-versions/0.0.1/t3.exe")}" %*`;
       yield* fs.writeFileString(shim, wrapper);
       yield* windows(installCli()).pipe(Effect.flip);
       assert.equal(yield* fs.readFileString(shim), wrapper);
@@ -147,7 +154,7 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       yield* fs.remove(shim);
       yield* fs.writeFileString(
         shim,
-        `@echo off\r\n"${path.join(runtimeDir, "versions/0.0.1/t3.exe")}" %*`,
+        `@echo off\r\n"${path.join(runtimeDir, "fork-versions/0.0.1/t3.exe")}" %*`,
       );
       const windowsInstalled = yield* windows(installCli());
       assert.equal(yield* fs.readFileString(shim), `@echo off\r\n"${executable}" %*`);
@@ -157,7 +164,7 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
         installCli().pipe(
           Effect.provideService(
             HostProcess.ExecutablePath,
-            path.join(runtimeDir, "versions/100%/t3"),
+            path.join(runtimeDir, "fork-versions/100%/t3"),
           ),
         ),
       ).pipe(Effect.flip);

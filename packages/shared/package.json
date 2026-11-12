@@ -558,6 +558,10 @@
     "./speech": {
       "types": "./src/speech.ts",
       "import": "./src/speech.ts"
+    },
+    "./runtimeDistribution": {
+      "types": "./src/runtimeDistribution.ts",
+      "import": "./src/runtimeDistribution.ts"
     }
   },
   "scripts": {

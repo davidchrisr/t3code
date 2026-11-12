@@ -24,9 +24,9 @@ it.effect("does not collect identities or export analytics despite explicit cons
       return Effect.die("Unexpected upstream analytics request");
     });
     const env = {
-      T3CODE_TELEMETRY_ENABLED: "true",
-      T3CODE_POSTHOG_HOST: "https://ingest.example.test",
-      T3CODE_POSTHOG_KEY: "test-key",
+      T3FORK_TELEMETRY_ENABLED: "true",
+      T3FORK_POSTHOG_HOST: "https://ingest.example.test",
+      T3FORK_POSTHOG_KEY: "test-key",
     };
 
     yield* Effect.gen(function* () {

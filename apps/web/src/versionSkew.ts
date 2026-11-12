@@ -99,7 +99,8 @@ export function manualServerUpdateCommand(
   targetVersion: string,
   installation?: ServerInstallation,
 ): string {
-  if (installation?.kind === "npm-global") {
+  if (installation === undefined) return `t3 update ${targetVersion}`;
+  if (installation.kind === "npm-global") {
     const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
     return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
   }

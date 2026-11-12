@@ -17,9 +17,9 @@ it.layer(NodeServices.layer)("t3 uninstall launcher", (it) => {
       const root = yield* fs
         .makeTempDirectoryScoped({ prefix: "t3-uninstall-" })
         .pipe(Effect.flatMap(fs.realPath));
-      const versionsDir = path.join(root, "runtime/versions");
+      const versionsDir = path.join(root, "runtime/fork-versions");
       const exe = path.join(versionsDir, "1.0.0/t3");
-      const otherExe = path.join(root, "other/runtime/versions/1.0.0/t3");
+      const otherExe = path.join(root, "other/runtime/fork-versions/1.0.0/t3");
       const copy = path.join(root, "copy/t3");
       for (const file of [exe, otherExe, copy]) {
         yield* fs.makeDirectory(path.dirname(file), { recursive: true });
@@ -57,7 +57,7 @@ it.layer(NodeServices.layer)("t3 uninstall launcher", (it) => {
       const throughAlias = path.join(root, "bin/t3-alias");
       const pruned = path.join(root, "bin/t3-pruned");
       yield* fs.symlink(root, path.join(root, "alias"));
-      yield* fs.symlink(path.join(root, "alias/runtime/versions/1.0.0/t3"), throughAlias);
+      yield* fs.symlink(path.join(root, "alias/runtime/fork-versions/1.0.0/t3"), throughAlias);
       yield* fs.symlink(path.join(versionsDir, "0.9.0/t3"), pruned);
       // Another program inside a version is not a launcher.
       const sibling = path.join(root, "bin/t3-sibling");
@@ -67,7 +67,7 @@ it.layer(NodeServices.layer)("t3 uninstall launcher", (it) => {
         [ours, theirs, copy, throughAlias, pruned, sibling, path.join(root, "missing")].join("\n") +
           "\n",
       );
-      for (const dir of [versionsDir, path.join(root, "alias/runtime/versions")]) {
+      for (const dir of [versionsDir, path.join(root, "alias/runtime/fork-versions")]) {
         assert.deepStrictEqual(yield* findRecordedLaunchers(dir), [ours, throughAlias, pruned]);
       }
 
@@ -75,7 +75,7 @@ it.layer(NodeServices.layer)("t3 uninstall launcher", (it) => {
       const cmd = path.join(root, "bin/t3.cmd");
       const edited = path.join(root, "bin/edited.cmd");
       yield* fs.writeFileString(cmd, `@echo off\r\n"${exe}" %*`);
-      yield* fs.writeFileString(edited, `@echo off\r\nset "T3CODE_HOME=D:\\other"\r\n"${exe}" %*`);
+      yield* fs.writeFileString(edited, `@echo off\r\nset "T3FORK_HOME=D:\\other"\r\n"${exe}" %*`);
       yield* fs.writeFileString(path.join(root, "runtime/launchers"), `${cmd}\r\n${edited}\r\n`);
       assert.deepStrictEqual(
         yield* findRecordedLaunchers(versionsDir).pipe(

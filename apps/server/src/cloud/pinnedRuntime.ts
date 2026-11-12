@@ -47,7 +47,7 @@ export function pinnedRuntimeCommand(paths: PinnedRuntimePaths): {
 }
 
 export function pinnedRuntimeVersionsDir(path: Path.Path, baseDir: string): string {
-  return path.join(baseDir, PINNED_RUNTIME_DIR, "versions");
+  return path.join(baseDir, PINNED_RUNTIME_DIR, "fork-versions");
 }
 
 export function pinnedRuntimePaths(
@@ -410,7 +410,7 @@ const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
 const PINNED_RUNTIME_PRUNE_GRACE = Duration.hours(1);
 /**
  * One `t3` launcher path per line, appended by the install scripts and by any prune that finds a
- * launcher on PATH. A service does not see the installer's `T3CODE_INSTALL_BIN_DIR` or the
+ * launcher on PATH. A service does not see the installer's `T3FORK_INSTALL_BIN_DIR` or the
  * interactive PATH, so this is how it finds a custom one, including installs that predate the file.
  */
 const PINNED_RUNTIME_LAUNCHERS_FILE = "launchers";
@@ -485,7 +485,7 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
     .split(/\r?\n/)
     .filter((launcher) => launcher.trim().length > 0);
   const found = [
-    environment["T3CODE_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin"),
+    environment["T3FORK_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin"),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(platform === "win32" ? ";" : ":"),
   ]
     .filter((directory) => path.isAbsolute(directory))

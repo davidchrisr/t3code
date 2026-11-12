@@ -20,7 +20,15 @@ const MISMATCH_HINT =
   "Version mismatch. Try syncing the client and server to the same T3 Code version.";
 
 describe("versionSkew", () => {
-  it("updates only the proven npm prefix and safely quotes its path", () => {
+  it("uses the matching manual command and preserves proven npm prefixes", () => {
+    for (const [installation, command] of [
+      [undefined, "t3 update 0.0.45"],
+      [{ kind: "npx" }, "npx t3@0.0.45"],
+      [{ kind: "bunx" }, "bunx t3@0.0.45"],
+      [{ kind: "pnpm-dlx" }, "pnpm dlx t3@0.0.45"],
+    ] as const) {
+      expect(manualServerUpdateCommand("0.0.45", installation)).toBe(command);
+    }
     expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
       "npm install --global --prefix '/opt/node' t3@0.0.45",
     );

@@ -73,7 +73,7 @@ import {
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_T3_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { PI_FILE_CHANGE_TOOLS, PI_T3FORK_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./modelCapabilities.ts";
 
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
@@ -2655,7 +2655,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           serviceTierMayBeSet = true;
           const result = yield* request({
             type: "prompt",
-            message: `/${PI_T3_SERVICE_TIER_COMMAND} ${serviceTier ?? ""}`.trimEnd(),
+            message: `/${PI_T3FORK_SERVICE_TIER_COMMAND} ${serviceTier ?? ""}`.trimEnd(),
           });
           // Pi before 0.99 acknowledges a handled extension command without a disposition.
           const disposition = recordString(result, "disposition");

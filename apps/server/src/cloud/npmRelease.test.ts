@@ -1,3 +1,4 @@
+import { vi } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ServerNpmReleaseError } from "@t3tools/contracts";
@@ -196,3 +197,6 @@ it.effect.each(["--registry=https://example.com", "../other", "other-package@lat
       expect(Result.isFailure(yield* service.get({ spec }).pipe(Effect.result))).toBe(true);
     }),
 );
+
+// Exercise the retained runtime machinery; fork refusal is covered with the production policy.
+vi.mock("@t3tools/shared/runtimeDistribution", () => ({ npmRuntimeRefusal: () => undefined }));

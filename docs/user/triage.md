@@ -23,7 +23,8 @@ Code server, so it gives you any restart steps and does not do them itself.
 If the app does not start, or triage does not work in the app, run:
 
 ```sh
-npx t3 triage
+t3 triage
 ```
 
+Use the CLI installed by the fork desktop app or a fork-built executable.
 It starts Claude Code or Codex in your terminal with the same instructions.

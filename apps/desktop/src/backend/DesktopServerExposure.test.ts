@@ -512,8 +512,8 @@ describe("DesktopServerExposure", () => {
         );
       }),
       {
-        T3CODE_DESKTOP_LAN_HOST: "100.90.1.2",
-        T3CODE_DESKTOP_HTTPS_ENDPOINTS: "https://public.example.test",
+        T3FORK_DESKTOP_LAN_HOST: "100.90.1.2",
+        T3FORK_DESKTOP_HTTPS_ENDPOINTS: "https://public.example.test",
       },
     ),
   );

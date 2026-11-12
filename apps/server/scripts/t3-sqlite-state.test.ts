@@ -88,6 +88,22 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
           { sharedHome: baseDir },
         ).pipe(Effect.flip);
         assert.equal(aliasError._tag, "SqliteStateSharedHomeMutationError");
+
+        const installedHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-installed-homes-" });
+        const forkHome = path.join(installedHome, ".t3fork");
+        for (const name of [".t3", ".t3fork"]) {
+          const protectedHome = path.join(installedHome, name);
+          yield* createFixtureDatabase(protectedHome);
+          const alias = path.join(aliasParent, name);
+          yield* fs.symlink(protectedHome, alias);
+          for (const destination of [protectedHome, alias]) {
+            const protectedError = yield* runSqliteState(
+              { operation: "exec", baseDir: destination, sql: "DELETE FROM fixtures" },
+              { sharedHome: forkHome },
+            ).pipe(Effect.flip);
+            assert.equal(protectedError._tag, "SqliteStateSharedHomeMutationError");
+          }
+        }
       }),
   );
 });

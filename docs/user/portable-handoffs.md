@@ -28,7 +28,7 @@ never shortens your request to make it fit.
 
 Recovery leaves running background work intact. Let it finish or stop it before retrying the handoff.
 
-Server operators can set `T3CODE_CONTEXT_HANDOFF_TOKEN_CAP` to change the initial history allowance
+Server operators can set `T3FORK_CONTEXT_HANDOFF_TOKEN_CAP` to change the initial history allowance
 (default 16,000; clamped to 1,024–64,000). This is an upper bound, not a provider context-window
 guarantee. Text accounting conservatively charges one token per UTF-8 byte, including attribution
 and JSON escaping. Imported history has a separate 64,000-byte ceiling; your current input and

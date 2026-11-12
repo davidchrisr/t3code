@@ -189,7 +189,7 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       expect(order).toEqual([]);
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      expect(yield* fs.readDirectory(path.join(baseDir, "runtime", "versions"))).toEqual([]);
+      expect(yield* fs.readDirectory(path.join(baseDir, "runtime", "fork-versions"))).toEqual([]);
       failDownload = false;
       expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
       expect(order).toEqual(["extract", "preflight", "accept"]);
@@ -401,10 +401,10 @@ it.layer(NodeServices.layer)("pruning runtimes on start", (it) => {
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-prune-on-start-" });
     const realHome = path.join(tempDir, "home");
     const baseDir = input.symlinkedHome ? path.join(tempDir, "linked-home") : realHome;
-    const versionsDir = path.join(baseDir, "runtime", "versions");
+    const versionsDir = path.join(baseDir, "runtime", "fork-versions");
     yield* TestClock.setTime(24 * 60 * 60 * 1000);
     for (const version of [staleVersion, packageJson.version]) {
-      const directory = path.join(realHome, "runtime", "versions", version);
+      const directory = path.join(realHome, "runtime", "fork-versions", version);
       yield* fs.makeDirectory(directory, { recursive: true });
       yield* fs.writeFileString(path.join(directory, "t3"), "");
       const sentinel = path.join(directory, ".install-complete");

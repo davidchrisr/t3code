@@ -105,7 +105,7 @@ place of `Cmd`. The on-screen keyboard's Return always inserts a new line.
 ## Edit the configuration file
 
 Keybindings live on the environment's machine, in
-`~/.t3/userdata/keybindings.json` by default. You can edit this file directly.
+`~/.t3fork/userdata/keybindings.json` by default. You can edit this file directly.
 It is a JSON array of rules:
 
 ```json
@@ -154,7 +154,11 @@ the same jumps in a browser.
 Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 
 ```json
-{ "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
+{
+  "key": "mod+j",
+  "command": "terminal.toggle",
+  "when": "terminalOpen && !terminalFocus"
+}
 ```
 
 ## Find in the current thread

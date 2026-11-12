@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -42,15 +43,21 @@ describe("DesktopEnvironment", () => {
     "names the packaged macOS app independently of upstream server state and client branding",
     () =>
       Effect.gen(function* () {
-        const environment = yield* makeEnvironment({ isPackaged: true });
+        const isolatedPort = yield* makeEnvironment(
+          { isPackaged: true },
+          { T3CODE_PORT: "3774", T3FORK_PORT: "4773" },
+        );
+        assert.equal(Option.getOrUndefined(isolatedPort.configuredBackendPort), 4773);
+        const environment = yield* makeEnvironment({ isPackaged: true }, { T3CODE_PORT: "3774" });
+        assert.isTrue(Option.isNone(environment.configuredBackendPort));
         assert.equal(environment.displayName, "T3 Fork");
         assert.equal(environment.branding.baseName, "T3 Code");
-        assert.equal(environment.baseDir, "/Users/alice/.t3");
-        assert.equal(environment.stateDir, "/Users/alice/.t3/userdata");
+        assert.equal(environment.baseDir, "/Users/alice/.t3fork");
+        assert.equal(environment.stateDir, "/Users/alice/.t3fork/userdata");
         for (const [env, expectedHome] of [
-          [{ T3CODE_HOME: "/recovery" }, "/Users/alice/.t3"],
+          [{ T3CODE_HOME: "/recovery" }, "/Users/alice/.t3fork"],
           [{ T3CODE_HOME: "/recovery", T3FORK_HOME: " /fork " }, "/fork"],
-          [{ T3CODE_HOME: "/recovery", T3FORK_HOME: "  " }, "/Users/alice/.t3"],
+          [{ T3CODE_HOME: "/recovery", T3FORK_HOME: "  " }, "/Users/alice/.t3fork"],
         ] as const) {
           const isolated = yield* makeEnvironment({ isPackaged: true }, env);
           assert.equal(isolated.baseDir, expectedHome);
@@ -89,8 +96,8 @@ describe("DesktopEnvironment", () => {
       );
       const production = yield* makeEnvironment();
 
-      assert.equal(development.stateDir, "/Users/alice/.t3/dev");
-      assert.equal(production.stateDir, "/Users/alice/.t3/userdata");
+      assert.equal(development.stateDir, "/Users/alice/.t3fork/dev");
+      assert.equal(production.stateDir, "/Users/alice/.t3fork/userdata");
     }),
   );
 });
