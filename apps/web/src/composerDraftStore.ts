@@ -3393,6 +3393,23 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 [threadKey]: {
                   ...existing,
                   images: [...existing.images, ...dedupedIncoming],
+                  persistedAttachments: [
+                    ...existing.persistedAttachments,
+                    ...dedupedIncoming.flatMap((image) =>
+                      image.previewUrl.startsWith("data:")
+                        ? [
+                            {
+                              id: image.id,
+                              name: image.name,
+                              mimeType: image.mimeType,
+                              sizeBytes: image.sizeBytes,
+                              dataUrl: image.previewUrl,
+                              ...(image.source ? { source: image.source } : {}),
+                            },
+                          ]
+                        : [],
+                    ),
+                  ],
                 },
               },
             };

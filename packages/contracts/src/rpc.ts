@@ -84,6 +84,14 @@ import {
 } from "./auth.ts";
 import { ClientActivityReportInput } from "./background.ts";
 import {
+  ComposerCopyInput,
+  ComposerListInput,
+  ComposerPublishInput,
+  ComposerRemoteEntry,
+  ComposerStorageError,
+  ComposerStoredPrompt,
+} from "./composerStorage.ts";
+import {
   FilesystemGetMetadataInput,
   FilesystemGetMetadataResult,
   FilesystemBrowseInput,
@@ -549,6 +557,9 @@ export const WS_METHODS = {
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
+  composerPublish: "composer.publish",
+  composerSubscribe: "composer.subscribe",
+  composerCopy: "composer.copy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
@@ -1032,6 +1043,22 @@ const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient
 const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComposerPublishRpc = Rpc.make(WS_METHODS.composerPublish, {
+  payload: ComposerPublishInput,
+  error: Schema.Union([ComposerStorageError, EnvironmentAuthorizationError]),
+});
+const WsComposerSubscribeRpc = Rpc.make(WS_METHODS.composerSubscribe, {
+  payload: ComposerListInput,
+  success: Schema.Array(ComposerRemoteEntry),
+  error: Schema.Union([ComposerStorageError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsComposerCopyRpc = Rpc.make(WS_METHODS.composerCopy, {
+  payload: ComposerCopyInput,
+  success: ComposerStoredPrompt,
+  error: Schema.Union([ComposerStorageError, EnvironmentAuthorizationError]),
 });
 
 const PullRequestRpcError = Schema.Union([
@@ -2145,6 +2172,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,
+  WsComposerPublishRpc,
+  WsComposerSubscribeRpc,
+  WsComposerCopyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,

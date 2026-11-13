@@ -1,4 +1,4 @@
-import { ComposerContextRecord, ForwardCompatibleArray } from "@t3tools/contracts";
+import { ComposerContextRecord, EnvironmentId, ForwardCompatibleArray } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 
@@ -20,6 +20,7 @@ const StashEntrySchema = Schema.Struct({
   id: Schema.String,
   createdAt: Schema.String,
   prompt: Schema.String,
+  environmentId: Schema.optionalKey(EnvironmentId),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   files: Schema.optionalKey(Schema.Array(PersistedComposerFileAttachment)),
   droppedImageNames: Schema.Array(Schema.String),
@@ -124,6 +125,7 @@ function readPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
 
 interface PromptStashStoreState {
   entries: ReadonlyArray<PromptStashEntry>;
+  bindUnscopedEntries: (environmentId: EnvironmentId) => void;
   stashEntry: (entry: PromptStashEntry) => {
     evicted: PromptStashEntry | null;
     /** False when the write failed outright (e.g. quota); nothing was kept. */
@@ -146,6 +148,16 @@ interface PromptStashStoreState {
 
 export const usePromptStashStore = create<PromptStashStoreState>()((set, get) => ({
   entries: [],
+  bindUnscopedEntries: (environmentId) => {
+    const entries = get().entries;
+    if (!entries.some((entry) => entry.environmentId === undefined)) return;
+    const next = entries.map((entry) =>
+      entry.environmentId === undefined
+        ? { ...entry, environmentId: entry.files?.[0]?.environmentId ?? environmentId }
+        : entry,
+    );
+    if (persistEntries(next).written) set({ entries: next });
+  },
   stashEntry: (entry) => {
     const nextEntries = [entry, ...get().entries];
     const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;

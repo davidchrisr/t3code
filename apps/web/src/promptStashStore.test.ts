@@ -114,6 +114,34 @@ describe("promptStashStore", () => {
     expect(usePromptStashStore.getState().takeEntry("citation-stash").entry).toBeNull();
   });
 
+  it("binds legacy stashes once and preserves the environment that owns uploaded files", () => {
+    const store = usePromptStashStore.getState();
+    const first = EnvironmentId.make("first");
+    const fileEnvironment = EnvironmentId.make("file-environment");
+    store.stashEntry(makeEntry({ id: "text" }));
+    store.stashEntry({
+      ...makeEntry({ id: "file" }),
+      files: [
+        {
+          id: "file",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 1,
+          attachmentId: "upload",
+          environmentId: fileEnvironment,
+        },
+      ],
+    });
+    store.bindUnscopedEntries(first);
+    store.bindUnscopedEntries(EnvironmentId.make("later"));
+    expect(
+      usePromptStashStore.getState().entries.map((entry) => [entry.id, entry.environmentId]),
+    ).toEqual([
+      ["file", fileEnvironment],
+      ["text", first],
+    ]);
+  });
+
   it("evicts the oldest entry past the cap and returns it", () => {
     const store = usePromptStashStore.getState();
     for (let index = 0; index < MAX_STASH_ENTRIES; index += 1) {
