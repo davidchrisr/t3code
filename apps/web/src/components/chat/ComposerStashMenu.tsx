@@ -1,6 +1,8 @@
 import { BookmarkIcon, FileIcon, FileTextIcon } from "lucide-react";
 import { memo, useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import type { ComposerRemoteEntry } from "@t3tools/contracts";
+import { groupComposerEntries } from "@t3tools/client-runtime/state/composer-storage";
 
 import { RelativeTime } from "../RelativeTime";
 import { cn } from "~/lib/utils";
@@ -36,8 +38,34 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
   onRestore: (entry: PromptStashEntry) => void;
   onDelete: (entry: PromptStashEntry) => void;
   onClose: () => void;
+  remoteEntries?: ReadonlyArray<ComposerRemoteEntry>;
+  sharingError?: string | null;
+  canCopyRemote?: boolean;
+  onCopyRemote?: (entry: ComposerRemoteEntry) => void;
 }) {
-  const { entries, stashShortcutLabel, composerFormRef, onRestore, onDelete, onClose } = props;
+  const { entries: localEntries, stashShortcutLabel, composerFormRef, onClose } = props;
+  const remoteId = (entry: ComposerRemoteEntry) =>
+    `remote:${JSON.stringify([entry.sessionId, entry.clientId, entry.threadId, entry.id])}`;
+  const remotes = new Map((props.remoteEntries ?? []).map((entry) => [remoteId(entry), entry]));
+  const entries: ReadonlyArray<PromptStashEntry> = [
+    ...localEntries,
+    ...[...remotes].map(([id, entry]) => ({
+      id,
+      prompt: entry.snippet,
+      createdAt: entry.updatedAt,
+      attachments: [],
+      droppedImageNames: [],
+    })),
+  ];
+  const groups = groupComposerEntries(props.remoteEntries ?? []);
+  const onRestore = (entry: PromptStashEntry) => {
+    const remote = remotes.get(entry.id);
+    if (remote === undefined) props.onRestore(entry);
+    else if (props.canCopyRemote) props.onCopyRemote?.(remote);
+  };
+  const onDelete = (entry: PromptStashEntry) => {
+    if (!remotes.has(entry.id)) props.onDelete(entry);
+  };
   const [highlightedId, setHighlightedId] = useState<string | null>(entries[0]?.id ?? null);
 
   const highlightedEntry = entries.find((entry) => entry.id === highlightedId) ?? entries[0];
@@ -154,7 +182,7 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
               </ComposerBanner.Content>
             </ComposerBanner.Row>
           ) : (
-            entries.map((entry) => (
+            localEntries.map((entry) => (
               <ComposerBanner.Row
                 render={<li />}
                 key={entry.id}
@@ -231,6 +259,69 @@ export const ComposerStashMenu = memo(function ComposerStashMenu(props: {
               </ComposerBanner.Row>
             ))
           )}
+          {[...groups].map(([key, group]) => (
+            <li key={key}>
+              <ComposerBanner.Row>
+                <ComposerBanner.Icon />
+                <ComposerBanner.Content className="text-muted-foreground">
+                  {group[0]?.clientName}
+                </ComposerBanner.Content>
+              </ComposerBanner.Row>
+              <ul>
+                {group.map((entry) => {
+                  const id = remoteId(entry);
+                  return (
+                    <ComposerBanner.Row
+                      render={<li />}
+                      key={id}
+                      className={cn(
+                        "relative rounded-sm",
+                        highlightedEntry?.id === id && "bg-accent text-accent-foreground",
+                      )}
+                      onMouseMove={() => setHighlightedId(id)}
+                      onFocus={() => setHighlightedId(id)}
+                    >
+                      <ComposerBanner.Icon>
+                        <FileTextIcon />
+                      </ComposerBanner.Icon>
+                      <ComposerBanner.Content>
+                        <button
+                          type="button"
+                          data-stash-restore={id}
+                          aria-label={`Copy prompt from ${entry.clientName}: ${entry.snippet}`}
+                          disabled={!props.canCopyRemote}
+                          className="min-w-0 flex-1 cursor-pointer truncate text-left text-foreground/80 outline-none before:absolute before:inset-0 before:rounded-sm focus-visible:before:ring-2 focus-visible:before:ring-inset focus-visible:before:ring-ring disabled:opacity-50"
+                          onPointerDown={(event) => event.preventDefault()}
+                          onClick={() => props.onCopyRemote?.(entry)}
+                        >
+                          {entry.snippet || `(${entry.attachmentCount} attachments)`}
+                        </button>
+                      </ComposerBanner.Content>
+                      <ComposerBanner.Actions>
+                        {entry.threadId === null ? null : (
+                          <span className="text-muted-foreground">Draft</span>
+                        )}
+                        <time
+                          dateTime={entry.updatedAt}
+                          className="shrink-0 text-muted-foreground tabular-nums max-sm:hidden"
+                        >
+                          <RelativeTime timestamp={entry.updatedAt} />
+                        </time>
+                      </ComposerBanner.Actions>
+                    </ComposerBanner.Row>
+                  );
+                })}
+              </ul>
+            </li>
+          ))}
+          {props.sharingError ? (
+            <ComposerBanner.Row render={<li />}>
+              <ComposerBanner.Icon />
+              <ComposerBanner.Content>
+                <span role="alert">{props.sharingError}</span>
+              </ComposerBanner.Content>
+            </ComposerBanner.Row>
+          ) : null}
         </ComposerBanner.Children>
       </ComposerBanner.Scroll>
     </ComposerBanner.Root>

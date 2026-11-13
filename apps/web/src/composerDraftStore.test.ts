@@ -243,7 +243,7 @@ describe("composerDraftStore addImages", () => {
     const restored = {
       ...unsent,
       id: "restored",
-      previewUrl: "blob:restored",
+      previewUrl: "data:image/png;base64,Ag==",
       file: new File([new Uint8Array(unsent.sizeBytes).fill(2)], unsent.name, {
         type: unsent.mimeType,
         lastModified: unsent.file.lastModified,
@@ -257,6 +257,19 @@ describe("composerDraftStore addImages", () => {
     expect(images?.[0]?.file).toBe(unsent.file);
     expect(images?.[1]?.file).toBe(restored.file);
     expect(revokeSpy).not.toHaveBeenCalled();
+    expect(
+      partializeComposerDraftStoreState(useComposerDraftStore.getState()).draftsByThreadKey[
+        scopedThreadKey(threadRef)
+      ]?.attachments,
+    ).toEqual([
+      {
+        id: restored.id,
+        name: restored.name,
+        mimeType: restored.mimeType,
+        sizeBytes: restored.sizeBytes,
+        dataUrl: restored.previewUrl,
+      },
+    ]);
   });
 
   it("deduplicates against existing images across calls by file signature", () => {
@@ -2494,6 +2507,11 @@ describe("composerDraftStore attachment references", () => {
     };
     expect(store.addFiles(threadRef, [file])).toEqual(["file-1"]);
     expect(store.addFiles(threadRef, [{ ...file, id: "file-2" }])).toEqual([]);
+    expect(
+      store.addFiles(threadRef, [{ ...file, id: "file-2", uploadedAttachmentId: "p2" }], {
+        allowDuplicates: true,
+      }),
+    ).toEqual(["file-2"]);
     const image = makeImage({ id: "img-1", previewUrl: "blob:img-1", name: "shot.png" });
     expect(store.addImages(threadRef, [image])).toEqual(["img-1"]);
     expect(
@@ -2501,6 +2519,13 @@ describe("composerDraftStore attachment references", () => {
         makeImage({ id: "img-2", previewUrl: "blob:img-2", name: "shot.png" }),
       ]),
     ).toEqual([]);
+    expect(
+      store.addImages(
+        threadRef,
+        [makeImage({ id: "img-2", previewUrl: "blob:img-2", name: "shot.png" })],
+        { allowDuplicates: true },
+      ),
+    ).toEqual(["img-2"]);
   });
 
   it("strips references when an image or file is removed", () => {

@@ -206,6 +206,11 @@ the current prompt and its attachments for later. Wait for uploads to finish fir
 With an empty composer, the same shortcut restores a single stash or opens the
 stash menu when there are several.
 
+The stash menu also shows prompts from your other clients connected to the same
+environment, including their drafts for the current thread. Select one to append
+its content and attachments to your composer; the original stays on the other
+client. This also works in the web client on your phone.
+
 Stashes containing uploaded files must be restored in their original environment.
 Those files are retained for 24 hours. After an upload expires, restore the prompt
 and use **Attach again** or remove the missing file before sending.

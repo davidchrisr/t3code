@@ -1,6 +1,7 @@
 import type { ChatComposerProps } from "./ChatComposer";
 import {
   type ComposerContextRecord,
+  type ComposerRemoteEntry,
   type EnvironmentId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type PreviewAnnotationPayload,
@@ -65,6 +66,9 @@ import {
 import { BackgroundThreadContext } from "./backgroundThread";
 import { isInSideChatPane } from "../../lib/sideChatPane";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { composerStorage, useComposerSharing } from "./useComposerSharing";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
 
 /**
  * The prompt stash: saving the draft aside, restoring or deleting an entry, the badge pulse,
@@ -148,8 +152,13 @@ export function useComposerStash(input: {
   // Each stash bumps the key; the badge replays its one-shot pulse animation per key.
   const [stashPulseKey, setStashPulseKey] = useState(0);
   const stashInFlightRef = useRef<Set<string>>(new Set());
+  const remoteCopyInFlightRef = useRef(false);
 
   const stashQueue = usePromptStashStore((state) => state.entries);
+  const sharing = useComposerSharing(
+    environmentId,
+    typeof composerDraftTarget === "string" ? null : composerDraftTarget.threadId,
+  );
   const stashEntryToQueue = usePromptStashStore((state) => state.stashEntry);
   const takeStashEntry = usePromptStashStore((state) => state.takeEntry);
   const finalizeStashEntryImages = usePromptStashStore((state) => state.finalizeEntryImages);
@@ -158,7 +167,12 @@ export function useComposerStash(input: {
     setStashPulseKey((key) => key + 1);
   };
 
-  const restoreStashEntry = async (menuEntry: PromptStashEntry) => {
+  const restoreStashEntry = async (
+    menuEntry: PromptStashEntry,
+    mode: "restore" | "copy" = "restore",
+  ) => {
+    const consume = mode === "restore";
+    const allowDuplicates = mode === "copy";
     const filesToVerify = menuEntry.files ?? [];
     if (filesToVerify.some((file) => file.environmentId !== environmentId)) {
       toastManager.add({
@@ -195,7 +209,9 @@ export function useComposerStash(input: {
       return;
     }
 
-    const { entry, durable } = takeStashEntry(menuEntry.id);
+    const { entry, durable } = consume
+      ? takeStashEntry(menuEntry.id)
+      : { entry: menuEntry, durable: true };
     if (!entry) return;
     if (!durable) {
       toastManager.add({
@@ -259,7 +275,9 @@ export function useComposerStash(input: {
         ),
       );
       const existingFileKeys = new Set(composerFilesNow.map(composerFileDedupKey));
-      const reattachMarkers = composerFilesNow.filter(composerFileNeedsReattach);
+      const reattachMarkers = allowDuplicates
+        ? []
+        : composerFilesNow.filter(composerFileNeedsReattach);
       const restoredMarkerIds = new Set<string>();
       const duplicateFiles: PersistedComposerFileAttachment[] = [];
       const markerReplacements: ComposerFileAttachment[] = [];
@@ -301,7 +319,7 @@ export function useComposerStash(input: {
           }
           continue;
         }
-        if (existingFileKeys.has(key)) {
+        if (!allowDuplicates && existingFileKeys.has(key)) {
           if (!expired && !retainedUploadIds.has(file.attachmentId)) {
             duplicateFiles.push(file);
           }
@@ -345,7 +363,10 @@ export function useComposerStash(input: {
       }
       const restoredFiles = [...markerReplacements, ...filesToAppend];
       if (restoredFiles.length > 0) {
-        addComposerDraftFiles(composerDraftTarget, restoredFiles, { appendReference: true });
+        addComposerDraftFiles(composerDraftTarget, restoredFiles, {
+          appendReference: true,
+          allowDuplicates,
+        });
         const restoredFilePrompt = getComposerDraft(composerDraftTarget)?.prompt;
         if (restoredFilePrompt !== undefined && restoredFilePrompt !== promptRef.current) {
           promptRef.current = restoredFilePrompt;
@@ -379,14 +400,15 @@ export function useComposerStash(input: {
       const pending = entry.attachments.filter(
         (attachment) =>
           !existingIds.has(attachment.id) &&
-          !existingDedupKeys.has(
-            `${attachment.mimeType}\0${attachment.sizeBytes}\0${attachment.name}`,
-          ),
+          (allowDuplicates ||
+            !existingDedupKeys.has(
+              `${attachment.mimeType}\0${attachment.sizeBytes}\0${attachment.name}`,
+            )),
       );
       unrestoredImageNames = pending.slice(capacity).map((attachment) => attachment.name);
       const restoredImages = hydrateImagesFromPersisted(pending.slice(0, capacity));
       if (restoredImages.length > 0) {
-        addComposerDraftImages(composerDraftTarget, restoredImages);
+        addComposerDraftImages(composerDraftTarget, restoredImages, { allowDuplicates });
       }
     }
 
@@ -431,6 +453,49 @@ export function useComposerStash(input: {
     }
   };
   const restoreStashEntryStable = useStableCallback(restoreStashEntry);
+  const copyRemoteEntry = useStableCallback(async (entry: ComposerRemoteEntry) => {
+    if (remoteCopyInFlightRef.current) return;
+    remoteCopyInFlightRef.current = true;
+    setIsStashMenuOpen(false);
+    try {
+      const targetKey = composerTargetKey(composerDraftTarget);
+      const result = await runAtomCommand(
+        appAtomRegistry,
+        composerStorage.copy,
+        {
+          environmentId,
+          input: {
+            sessionId: entry.sessionId,
+            clientId: entry.clientId,
+            id: entry.id,
+            threadId: entry.threadId,
+          },
+        },
+        { reportFailure: false },
+      );
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Could not copy this prompt",
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      if (!isComposerDraftTargetOpen(targetKey) || isRevertingCheckpoint()) {
+        for (const file of result.value.files ?? [])
+          releasePersistedAttachmentUpload({
+            id: file.id,
+            environmentId,
+            attachmentId: file.attachmentId,
+          });
+        return;
+      }
+      await restoreStashEntry(result.value, "copy");
+    } finally {
+      remoteCopyInFlightRef.current = false;
+    }
+  });
 
   const deleteStashEntry = (entry: PromptStashEntry) => {
     const { entry: removed, durable } = takeStashEntry(entry.id);
@@ -494,7 +559,7 @@ export function useComposerStash(input: {
     ];
     if (prompt.length === 0 && images.length === 0 && files.length === 0) {
       const entries = usePromptStashStore.getState().entries;
-      const entry = entries.length === 1 ? entries[0] : undefined;
+      const entry = entries.length === 1 && sharing.entries.length === 0 ? entries[0] : undefined;
       if (entry && !entry.pendingImageCount) {
         await restoreStashEntry(entry);
       } else {
@@ -548,6 +613,7 @@ export function useComposerStash(input: {
       // encoding are not wiped.
       const { evicted, written, durable } = stashEntryToQueue({
         id: entryId,
+        environmentId,
         createdAt: new Date().toISOString(),
         prompt,
         attachments: [],
@@ -732,6 +798,10 @@ export function useComposerStash(input: {
 
   return {
     stashQueue,
+    remoteStashEntries: sharing.entries,
+    stashSharingError: sharing.error,
+    canCopyRemoteStash: sharing.canCopy,
+    copyRemoteEntry,
     isStashMenuOpen,
     setIsStashMenuOpen,
     stashPulseKey,

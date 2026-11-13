@@ -7,11 +7,12 @@ import { ComposerBanner } from "./ComposerBanner";
 export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   count: number;
   menuOpen: boolean;
+  showEmpty?: boolean;
   /** Bumped per stash; each new key replays the pulse. 0 means never pulsed. */
   pulseKey: number;
   onToggleMenu: () => void;
 }) {
-  if (props.count === 0) return null;
+  if (props.count === 0 && !props.showEmpty) return null;
   const pulsed = props.pulseKey > 0;
   const count = (
     <ComposerBanner.Count
