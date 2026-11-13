@@ -52,6 +52,9 @@ const PREVIEW_FORWARDED_COMMANDS = [
   "rightPanel.toggleMaximized",
   "thread.cycleRecent",
   "preview.focusUrl",
+  "preview.zoomIn",
+  "preview.zoomOut",
+  "preview.resetZoom",
   "preview.find",
 ] as const;
 

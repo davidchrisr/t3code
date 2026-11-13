@@ -50,6 +50,8 @@ export interface DesktopBrowserTabDebugger {
     readonly applicationHost: () => BrowserApplicationHost | undefined;
     readonly setProtocolActive: (active: boolean) => Promise<void>;
   };
+  /** Runs after the server clears the tab's cookies, so state kept beside them goes too. */
+  readonly cookiesCleared?: () => Promise<void>;
 }
 
 const keyOf = ({ threadId, tabId }: DesktopBrowserTabKey) => `${threadId}\u0000${tabId}`;
@@ -85,8 +87,8 @@ interface AttachedTab {
    */
   agentUsed: boolean;
   focusReleasing: boolean;
-  /** The sessions streaming the guest; one stopping leaves the others' screencasts running. */
-  readonly screencasts: Set<string | undefined>;
+  /** The sessions sharing the guest's one Chromium screencast; it stops with the last of them. */
+  readonly screencasts: Map<string | undefined, { started: boolean; pending: number }>;
   readonly onMessage: (
     event: Electron.Event,
     method: string,
@@ -348,9 +350,15 @@ export const make = Effect.gen(function* () {
     dropFocusHolds(tab);
   };
 
+  /** An owner that leaves without stopping would otherwise keep the screencast running unseen. */
+  const leaveScreencast = (tab: AttachedTab, owner: string | undefined) => {
+    if (!tab.screencasts.delete(owner) || tab.screencasts.size > 0) return;
+    void tab.debuggee.debugger.sendCommand("Page.stopScreencast").catch(() => {});
+  };
+
   /** A detached session, such as a closed viewer, waits on nothing it sent. */
   const dropSessionHolds = (tab: AttachedTab, owner: string) => {
-    tab.screencasts.delete(owner);
+    leaveScreencast(tab, owner);
     for (const [pending, holder] of tab.focusPending) {
       if (holder === owner) tab.focusPending.delete(pending);
     }
@@ -376,9 +384,9 @@ export const make = Effect.gen(function* () {
 
   const relayFor = (tab: AttachedTab) => {
     if (tab.relay) return tab.relay;
-    const { webContents, debugger: debuggee } = tab.debuggee;
-    const send = (method: string, params: Record<string, unknown>, sessionId?: string) =>
-      sendPageCommand(
+    const { webContents, debugger: debuggee, cookiesCleared } = tab.debuggee;
+    const send = async (method: string, params: Record<string, unknown>, sessionId?: string) => {
+      const result = await sendPageCommand(
         webContents,
         debuggee,
         method,
@@ -386,6 +394,9 @@ export const make = Effect.gen(function* () {
         sessionId,
         tab.debuggee.nativeView?.applicationHost(),
       );
+      if (method === "Network.clearBrowserCookies") await cookiesCleared?.();
+      return result;
+    };
     const detachedOwners = new Set<string>();
     /** Viewers and recordings stream; the agent's own sessions never do. */
     const streamingOwners = new Set<string>();
@@ -393,13 +404,19 @@ export const make = Effect.gen(function* () {
       {
         send: (method, params, sessionId, owner) => {
           // A child session's screencast is not the page's, such as a late one on a detached session.
-          if (sessionId === undefined && method === "Page.startScreencast") {
-            tab.screencasts.add(owner);
+          const stream =
+            sessionId === undefined && method === "Page.startScreencast"
+              ? (tab.screencasts.get(owner) ?? { started: false, pending: 0 })
+              : undefined;
+          if (stream) {
+            stream.pending += 1;
+            tab.screencasts.set(owner, stream);
             if (owner !== undefined) streamingOwners.add(owner);
             syncPainting(tab);
           } else if (sessionId === undefined && method === "Page.stopScreencast") {
             tab.screencasts.delete(owner);
             syncPainting(tab);
+            if (tab.screencasts.size > 0) return Promise.resolve({});
           }
           // A person's input through a viewer, or Playwright's own housekeeping, is not the agent's.
           if (
@@ -433,19 +450,42 @@ export const make = Effect.gen(function* () {
                   held ? holdFocus(tab, owner, () => forward(current)) : forward(current),
               )
             : method === "Page.startScreencast"
-              ? holdFocus(tab, owner, forward).catch((cause: unknown) => {
-                  // A viewer can outlive a refused stream; nothing is streaming for it.
-                  if (sessionId === undefined && tab.relay === relay) tab.screencasts.delete(owner);
-                  releaseFocusWhenIdle(tab);
-                  syncPainting(tab);
-                  throw cause;
-                })
+              ? holdFocus(tab, owner, forward).then(
+                  (result) => {
+                    if (stream) {
+                      stream.pending -= 1;
+                      stream.started = true;
+                      // A detach's stop can overtake a start still waiting on focus; nobody owns it now.
+                      if (tab.screencasts.get(owner) !== stream && tab.screencasts.size === 0) {
+                        void debuggee.sendCommand("Page.stopScreencast").catch(() => {});
+                      }
+                    }
+                    return result;
+                  },
+                  (cause: unknown) => {
+                    if (stream) stream.pending -= 1;
+                    // A viewer can outlive a refused start; its running or pending stream still holds it.
+                    if (
+                      stream &&
+                      !stream.started &&
+                      stream.pending === 0 &&
+                      tab.relay === relay &&
+                      tab.screencasts.get(owner) === stream
+                    ) {
+                      leaveScreencast(tab, owner);
+                    }
+                    releaseFocusWhenIdle(tab);
+                    syncPainting(tab);
+                    throw cause;
+                  },
+                )
               : holdFocus(tab, owner, forward);
         },
         sessionDetached: (owner) => {
           detachedOwners.add(owner);
           dropSessionHolds(tab, owner);
         },
+        receivesScreencast: (owner) => tab.screencasts.has(owner),
         targetId: () =>
           debuggee
             .sendCommand("Target.getTargetInfo")
@@ -542,7 +582,7 @@ export const make = Effect.gen(function* () {
       paintReady: null,
       agentUsed: false,
       focusReleasing: false,
-      screencasts: new Set(),
+      screencasts: new Map(),
       onMessage: (_event, method, params, sessionId) => {
         if (method === "Page.downloadWillBegin") {
           const guid = (params as { guid?: unknown } | undefined)?.guid;

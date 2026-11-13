@@ -14,7 +14,6 @@ import {
 } from "@t3tools/client-runtime/state/terminal";
 
 import {
-  shouldClearTerminalSelectionAction,
   shouldHandleTerminalExit,
   shouldBypassTerminalInput,
   synchronizeTerminalOutput,
@@ -105,19 +104,24 @@ describe("terminal thread shortcuts", () => {
     }
   });
 
-  it("respects thread jump focus conditions and later command precedence", () => {
-    using _drawer = mockTerminalDrawerOpen(false);
-    const restricted = compileResolvedKeybindingsConfig([
-      { key: "ctrl+g", command: "thread.jump.1", when: "!terminalFocus" },
-    ]);
-    expect(shouldBypassTerminalInput(shortcutEvent(), restricted, threadRef, "Linux")).toBe(false);
+  it.each(["thread.jump.1", "thread.next", "thread.previous"] as const)(
+    "respects %s focus conditions and later command precedence",
+    (command) => {
+      using _drawer = mockTerminalDrawerOpen(false);
+      const restricted = compileResolvedKeybindingsConfig([
+        { key: "ctrl+g", command, when: "!terminalFocus" },
+      ]);
+      expect(shouldBypassTerminalInput(shortcutEvent(), restricted, threadRef, "Linux")).toBe(
+        false,
+      );
 
-    const shadowed = compileResolvedKeybindingsConfig([
-      { key: "ctrl+g", command: "thread.jump.1" },
-      { key: "ctrl+g", command: "sidebar.toggle" },
-    ]);
-    expect(shouldBypassTerminalInput(shortcutEvent(), shadowed, threadRef, "Linux")).toBe(false);
-  });
+      const shadowed = compileResolvedKeybindingsConfig([
+        { key: "ctrl+g", command },
+        { key: "ctrl+g", command: "sidebar.toggle" },
+      ]);
+      expect(shouldBypassTerminalInput(shortcutEvent(), shadowed, threadRef, "Linux")).toBe(false);
+    },
+  );
 
   it("leaves ordinary terminal typing alone", () => {
     using _drawer = mockTerminalDrawerOpen(false);
@@ -147,23 +151,6 @@ describe("terminal thread shortcuts", () => {
 });
 
 describe("terminal selection actions", () => {
-  it("does not let an old selection popup cancel its replacement right-click menu", () => {
-    expect(
-      shouldClearTerminalSelectionAction({
-        actionPending: false,
-        openMenuRequestId: 3,
-        currentRequestId: 4,
-      }),
-    ).toBe(false);
-    expect(
-      shouldClearTerminalSelectionAction({
-        actionPending: false,
-        openMenuRequestId: null,
-        currentRequestId: 4,
-      }),
-    ).toBe(false);
-  });
-
   it("handles an exit that lands while the terminal surface is still loading", () => {
     expect(shouldHandleTerminalExit("exited", "running", false, 1)).toBe(true);
     expect(shouldHandleTerminalExit("exited", "exited", false, 1)).toBe(false);

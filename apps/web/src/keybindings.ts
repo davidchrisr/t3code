@@ -296,6 +296,18 @@ export function threadTraversalDirectionFromCommand(
   return null;
 }
 
+export function isThreadNavigationShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  const command = resolveShortcutCommand(event, keybindings, options);
+  return (
+    threadTraversalDirectionFromCommand(command) !== null ||
+    threadJumpIndexFromCommand(command ?? "") !== null
+  );
+}
+
 export function shouldShowThreadJumpHintsForModifiers(
   modifiers: ShortcutModifierStateLike,
   keybindings: ResolvedKeybindingsConfig,

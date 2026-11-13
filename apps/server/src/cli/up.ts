@@ -42,7 +42,7 @@ interface Setup {
   /** T3 Connect revoked the link; `t3 connect` links again. */
   readonly connectRevoked: boolean;
   readonly lan: boolean;
-  /** An installed service with no T3FORK_LAN keeps the old default: on. */
+  /** An installed service with no T3FORK_LAN or T3FORK_HOST keeps the old default: on. */
   readonly lanFromOldDefault: boolean;
   readonly host: string | undefined;
 }
@@ -86,7 +86,7 @@ const readSetup = Effect.fn("cli.up.read_setup")(function* () {
     connect,
     connectRevoked,
     lan: Option.getOrElse(lan, () => servesThisHome),
-    lanFromOldDefault: Option.isNone(lan) && servesThisHome,
+    lanFromOldDefault: Option.isNone(lan) && servesThisHome && entries.T3FORK_HOST === undefined,
     host: entries.T3FORK_HOST,
   } satisfies Setup;
 });

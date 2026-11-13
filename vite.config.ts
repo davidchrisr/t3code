@@ -51,6 +51,12 @@ const RESTRICTED_IMPORT_PATHS = [
     message:
       "Use NativeScrollViewMarker or NativeScrollView (src/native/NativeScrollViewMarker.tsx): they carry the header's scroll-edge blur under the Duo's vertical bar.",
   },
+  {
+    name: "react-native",
+    importNames: ["RefreshControl"],
+    message:
+      "Use RefreshControl from src/components/ui/RefreshControl: Android bottom sheets own the pull at the top, so it steps aside there.",
+  },
 ];
 
 const RESTRICTED_UI_VARIANT_PATTERNS = [
@@ -95,7 +101,7 @@ export default defineConfig({
   run: {
     cache: taskCacheConfig,
     tasks: {
-      ...cachedTestTasks(process.env.T3_CACHED_TESTS),
+      ...cachedTestTasks(process.env.T3FORK_CACHED_TESTS),
       // The two knip passes read the same files and write nothing, so they run side by side.
       // The `knip:check` script runs this task, so `vp run knip:check` and `pnpm run knip:check` both use it.
       "knip:check:all": {

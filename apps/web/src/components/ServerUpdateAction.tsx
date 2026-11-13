@@ -279,7 +279,10 @@ export function ServerUpdateAction({
   appearance = "button",
 }: ServerUpdateTarget & UpdateButtonProps) {
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
-  const updatesInstalledCli = installation === undefined || installation.kind === "npm-global";
+  const updatesInstalledCli =
+    installation === undefined ||
+    installation.kind === "npm-global" ||
+    installation.kind === "t3-launcher";
   const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
   const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
@@ -294,7 +297,7 @@ export function ServerUpdateAction({
         description:
           installation === undefined
             ? `On ${serverLabel}, run \`${command}\` with the CLI matching this server, using its full path if it is not on PATH. For a fork server, use the fork CLI. This updates the installed CLI; restart the server with that executable and your usual options. For a source run, update and rebuild the checkout instead.`
-            : installation.kind === "npm-global"
+            : installation.kind === "npm-global" || installation.kind === "t3-launcher"
               ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
               : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
       });

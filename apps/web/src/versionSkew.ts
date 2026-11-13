@@ -100,9 +100,13 @@ export function manualServerUpdateCommand(
   installation?: ServerInstallation,
 ): string {
   if (installation === undefined) return `t3 update ${targetVersion}`;
-  if (installation.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  if (installation?.kind === "npm-global") {
+    return `npm install --global --prefix ${quote(installation.prefix)} t3@${targetVersion}`;
+  }
+  if (installation?.kind === "t3-launcher") {
+    // An inherited T3FORK_HOME would otherwise send the update to a home the launcher is not in.
+    return `${quote(installation.launcher)} update --base-dir ${quote(installation.baseDir)} ${targetVersion}`;
   }
   const runner =
     installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
